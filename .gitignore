@@ -1,5 +1,21 @@
+# Configuration and Environment Secrets
+config.json
+.env
+
+# Local SQLite Database Artifacts and WAL Journals
 *.db
 *.db-wal
 *.db-shm
-config.json
-.env
+
+# Go Compiler Binaries and Test Executables
+anime-sentinel
+anime-test
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Core OS Metadata Tracking Files
+.DS_Store
+Thumbs.db
