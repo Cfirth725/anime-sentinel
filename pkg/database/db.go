@@ -10,14 +10,15 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// Config holds the local environment configuration parameters
+// Config encapsulates environment configuration fields mapped to JSON file properties.
 type Config struct {
 	Port          string `json:"PORT"`
 	DatabasePath  string `json:"DATABASE_PATH"`
 	SQLiteWALMode bool   `json:"SQLITE_WAL_MODE"`
 }
 
-// LoadConfig reads the un-tracked local json parameter file
+// LoadConfig opens and decodes an un-tracked local JSON parameter file.
+// Utilizing a stream decoder minimizes allocations compared to loading the entire file into an intermediate buffer.
 func LoadConfig(path string) (Config, error) {
 	var config Config
 	file, err := os.Open(path)
@@ -31,36 +32,37 @@ func LoadConfig(path string) (Config, error) {
 	return config, err
 }
 
-// InitDB initializes the SQLite connection and ingests the external schema file
+// InitDB initializes the SQLite connection pool and handles schema parsing from an external file.
 func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) {
-	// 1. Establish file descriptor link
+	// 1. Establish the database engine connection pool link.
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
 
-	// 2. Configure high-concurrency multi-process WAL settings
+	// 2. Configure high-concurrency multi-process Write-Ahead Logging (WAL) settings.
+	// WAL mode decouples reader and writer transactions to maximize database throughput.
 	if useWAL {
 		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
 		}
-		slog.Info("🔒 SQLite engine initialized with Write-Ahead Logging (WAL)")
+		slog.Info("SQLite engine initialized with Write-Ahead Logging (WAL)")
 	}
 
-	// 3. Read the external schema.sql file
+	// 3. Read the external schema.sql file definition into memory.
 	schemaBytes, err := os.ReadFile(schemaFilePath)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to read schema file at %s: %w", schemaFilePath, err)
 	}
 
-	// 4. Execute schema payload
+	// 4. Execute the raw schema SQL statements to verify database partitions and constraints.
 	if _, err := db.Exec(string(schemaBytes)); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to execute external schema sql: %w", err)
 	}
 
-	slog.Info("📊 Relational schema and indexing partitions verified from schema.sql")
+	slog.Info("Database schema and indexing verified successfully")
 	return db, nil
 }

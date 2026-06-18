@@ -35,12 +35,24 @@ CREATE TABLE IF NOT EXISTS watch_progress (
     user_id INTEGER,
     media_id INTEGER,
     current_episode_progress INTEGER DEFAULT 0,
+    sentiment INTEGER NOT NULL CHECK(sentiment IN (-1, 0, 1)) DEFAULT 0,
     last_watched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, media_id),
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
 );
 
+-- High-Volume Raw Ingestion Staging Table (For historical audit logging)
+CREATE TABLE IF NOT EXISTS ingest_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    raw_title TEXT NOT NULL,
+    sentiment INTEGER NOT NULL CHECK(sentiment IN (-1, 0, 1)) DEFAULT 0,
+    processed_status TEXT CHECK(processed_status IN ('PENDING', 'PROCESSED', 'FAILED')) DEFAULT 'PENDING',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- High-Performance Query Optimizations
 CREATE INDEX IF NOT EXISTS idx_catalog_lookup ON media_catalog(external_id);
 CREATE INDEX IF NOT EXISTS idx_progress_user ON watch_progress(user_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_status ON ingest_history(processed_status);
