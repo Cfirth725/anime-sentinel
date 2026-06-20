@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Cfirth725/anime-sentinel/pkg/database"
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
 	"github.com/Cfirth725/anime-sentinel/pkg/parser"
 )
@@ -46,22 +47,25 @@ func (ie *IngestionEngine) worker(workerID int) {
 	// Range over the channel continuously drains items until the channel is explicitly closed.
 	for payload := range ie.queue {
 		// Execute title cleaning and normalization logic out-of-band.
-		// Captures the single NormalizedMedia struct returned by the parser.
 		media := parser.NormalizeWatchEntry(payload.RawTitle)
 
-		slog.Info("Worker processed and normalized payload item",
+		// Persist the normalized tracking metrics directly to the staging storage layer.
+		err := database.InsertIngestHistory(ie.db, payload.Username, media.BaseTitle, media.EpisodeNum, media.IsMovie, payload.Sentiment)
+		if err != nil {
+			slog.Error("Database insertion failed for staged payload item",
+				"worker_id", workerID,
+				"user", payload.Username,
+				"error", err,
+			)
+			continue
+		}
+
+		slog.Debug("Worker successfully staged payload item to storage",
 			"worker_id", workerID,
 			"user", payload.Username,
-			"raw_title", payload.RawTitle,
 			"normalized_title", media.BaseTitle,
 			"episode", media.EpisodeNum,
-			"is_movie", media.IsMovie,
-			"sentiment", payload.Sentiment,
 		)
-
-		// Temporary baseline throttle to simulate storage and network latency.
-		// This will be replaced by Step 2 database insertions.
-		time.Sleep(50 * time.Millisecond)
 	}
 }
 

@@ -66,3 +66,21 @@ func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) 
 	slog.Info("Database schema and indexing verified successfully")
 	return db, nil
 }
+
+// InsertIngestHistory inserts a normalized tracking payload into the staging history table.
+// Using explicit argument bounds enforces data integrity at the database layer.
+func InsertIngestHistory(db *sql.DB, username string, baseTitle string, episodeNum int, isMovie bool, sentiment int) error {
+	query := `
+		INSERT INTO ingest_staging_history (username, normalized_title, episode_number, is_movie, sentiment, created_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+	`
+
+	// Convert the boolean isMovie flag to an integer representation for SQLite storage compatibility
+	isMovieFlag := 0
+	if isMovie {
+		isMovieFlag = 1
+	}
+
+	_, err := db.Exec(query, username, baseTitle, episodeNum, isMovieFlag, sentiment)
+	return err
+}
