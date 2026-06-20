@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
+	"github.com/Cfirth725/anime-sentinel/pkg/parser"
 )
 
-// IngestionEngine manages the thread-safe async buffer queue and orchestrates 
+// IngestionEngine manages the thread-safe async buffer queue and orchestrates
 // background database workers, decoupling the API from the storage layer.
 type IngestionEngine struct {
 	db          *sql.DB
@@ -18,7 +19,7 @@ type IngestionEngine struct {
 	workerCount int
 }
 
-// NewIngestionEngine constructs the core pipeline component, initializing the thread-safe 
+// NewIngestionEngine constructs the core pipeline component, initializing the thread-safe
 // buffered channel to balance maximum payload capacity against the system memory footprint.
 func NewIngestionEngine(db *sql.DB, bufferSize int, workerCount int) *IngestionEngine {
 	return &IngestionEngine{
@@ -28,7 +29,7 @@ func NewIngestionEngine(db *sql.DB, bufferSize int, workerCount int) *IngestionE
 	}
 }
 
-// StartWorkerPool ignites the background routines. Using a pointer receiver (*IngestionEngine) 
+// StartWorkerPool ignites the background routines. Using a pointer receiver (*IngestionEngine)
 // ensures reference to the engine's active channel instead of duplicating it in memory.
 func (ie *IngestionEngine) StartWorkerPool() {
 	slog.Info("Activating asynchronous worker pool...", "workers", ie.workerCount)
@@ -41,23 +42,30 @@ func (ie *IngestionEngine) StartWorkerPool() {
 // Running concurrently allows heavy data translations to execute without blocking the client.
 func (ie *IngestionEngine) worker(workerID int) {
 	slog.Debug("Worker initialized and ready", "worker_id", workerID)
-	
+
 	// Range over the channel continuously drains items until the channel is explicitly closed.
 	for payload := range ie.queue {
-		// Asynchronous Execution Block: Phase 3 will integrate parser.NormalizeWatchEntry
-		// and execute downstream external API metadata calls here.
-		slog.Info("Worker processing payload item asynchronously",
+		// Execute title cleaning and normalization logic out-of-band.
+		// Captures the single NormalizedMedia struct returned by the parser.
+		media := parser.NormalizeWatchEntry(payload.RawTitle)
+
+		slog.Info("Worker processed and normalized payload item",
 			"worker_id", workerID,
+			"user", payload.Username,
 			"raw_title", payload.RawTitle,
+			"normalized_title", media.BaseTitle,
+			"episode", media.EpisodeNum,
+			"is_movie", media.IsMovie,
 			"sentiment", payload.Sentiment,
 		)
 
-		// Temporary baseline throttle to simulate storage and network latency
+		// Temporary baseline throttle to simulate storage and network latency.
+		// This will be replaced by Step 2 database insertions.
 		time.Sleep(50 * time.Millisecond)
 	}
 }
 
-// HandleIngest serves as the high-performance HTTP gateway loop. It decodes batches, 
+// HandleIngest serves as the high-performance HTTP gateway loop. It decodes batches,
 // runs rapid sanity checks, and offloads payloads to the channel queue in under 2ms.
 func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -89,7 +97,7 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 
-		// Non-blocking channel handoff. The select block attempts a direct push; if the 
+		// Non-blocking channel handoff. The select block attempts a direct push; if the
 		// buffer is completely full, it triggers the default fallback instantly to prevent deadlocks.
 		select {
 		case ie.queue <- p:
@@ -105,7 +113,7 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 	duration := time.Since(start)
 	slog.Info("Ingestion bulk dispatch successful", "count", acceptedCount, "duration", duration)
 
-	// Return a 202 Accepted status code to explicitly signal that the data has been 
+	// Return a 202 Accepted status code to explicitly signal that the data has been
 	// securely queued for processing, allowing the client to disconnect immediately.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
