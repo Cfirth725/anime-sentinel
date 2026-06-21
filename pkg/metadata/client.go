@@ -33,11 +33,10 @@ func NewAniListClient() *AniListClient {
 
 // FetchSeriesMetadata blocks execution against the internal ticker before dispatching
 // a GraphQL request to safely search and resolve clean media metadata.
+// It incorporates an exponential backoff retry mechanism to survive upstream 429 rate limits.
 func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListMedia, error) {
 	// STOP THE THROTTLE: Park the routine until the shared ticker drops a clock token.
 	<-c.ticker.C
-
-	slog.Debug("Rate limit token acquired. Dispatching upstream metadata query", "search_title", cleanTitle)
 
 	// Hardcoded GraphQL query string optimized for core title and format matching
 	query := `
@@ -68,19 +67,47 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 		return nil, fmt.Errorf("failed to marshal GraphQL payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.endpoint, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to construct outbound HTTP request: %w", err)
+	maxRetries := 3
+	backoffDuration := 4 * time.Second
+	var resp *http.Response
+
+	// Execute the HTTP transport retry loop
+	for i := 0; i < maxRetries; i++ {
+		slog.Debug("Rate limit token acquired. Dispatching upstream metadata query", "search_title", cleanTitle, "attempt", i+1)
+
+		// Create a fresh request body reader stream for each retry attempt
+		req, err := http.NewRequest(http.MethodPost, c.endpoint, bytes.NewBuffer(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to construct outbound HTTP request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err = c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("network execution failed against AniList gateway: %w", err)
+		}
+
+		// Handle 429 Rate Limits with Exponential Backoff
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close() // Close the body immediately since we are retrying
+
+			slog.Warn("🛑 Upstream 429 rate limit breached. Initiating cool-down backoff period...",
+				"title", cleanTitle,
+				"delay_seconds", backoffDuration.Seconds(),
+				"attempt", i+1,
+			)
+
+			time.Sleep(backoffDuration)
+			backoffDuration *= 2 // Double the pause duration exponentially for the next pass
+			continue
+		}
+
+		// Break out of the retry loop if we get any other status code (200, 404, 500, etc.)
+		break
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	// Execute the HTTP transport loop
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("network execution failed against AniList gateway: %w", err)
-	}
 	defer resp.Body.Close()
 
 	// Intercept API errors early
