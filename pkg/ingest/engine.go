@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Cfirth725/anime-sentinel/pkg/database"
+	"github.com/Cfirth725/anime-sentinel/pkg/metadata"
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
 	"github.com/Cfirth725/anime-sentinel/pkg/parser"
 )
@@ -18,15 +19,17 @@ type IngestionEngine struct {
 	db          *sql.DB
 	queue       chan models.IngestPayload
 	workerCount int
+	alClient    *metadata.AniListClient
 }
 
 // NewIngestionEngine constructs the core pipeline component, initializing the thread-safe
-// buffered channel to balance maximum payload capacity against the system memory footprint.
-func NewIngestionEngine(db *sql.DB, bufferSize int, workerCount int) *IngestionEngine {
+// buffered channel and binding the upstream synchronization client.
+func NewIngestionEngine(db *sql.DB, bufferSize int, workerCount int, alClient *metadata.AniListClient) *IngestionEngine {
 	return &IngestionEngine{
 		db:          db,
 		queue:       make(chan models.IngestPayload, bufferSize),
 		workerCount: workerCount,
+		alClient:    alClient,
 	}
 }
 
@@ -66,6 +69,25 @@ func (ie *IngestionEngine) worker(workerID int) {
 			"normalized_title", media.BaseTitle,
 			"episode", media.EpisodeNum,
 		)
+
+		// Fetch third-party metadata from AniList via the throttled client.
+		// The internal time.Ticker automatically prevents workers from breaking API rate limits.
+		aniListMedia, err := ie.alClient.FetchSeriesMetadata(media.BaseTitle)
+		if err != nil {
+			slog.Warn("Upstream external synchronization delayed or failed", "title", media.BaseTitle, "error", err)
+			continue
+		}
+
+		if aniListMedia != nil {
+			slog.Info("Successfully synchronized tracking data with AniList API",
+				"worker_id", workerID,
+				"anilist_id", aniListMedia.ID,
+				"title_romaji", aniListMedia.Title.Romaji,
+				"format", aniListMedia.Format,
+			)
+		} else {
+			slog.Warn("Upstream match execution completed with zero results", "title", media.BaseTitle)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Cfirth725/anime-sentinel/pkg/database"
 	"github.com/Cfirth725/anime-sentinel/pkg/ingest"
+	"github.com/Cfirth725/anime-sentinel/pkg/metadata"
 )
 
 func main() {
@@ -38,7 +39,10 @@ func main() {
 
 	// 4. Initialize the decoupled Ingestion Engine. Passing traffic down a 10,000-capacity
 	// buffered channel allows the API to return sub-2ms responses while background workers scale.
-	engine := ingest.NewIngestionEngine(db, 10000, 4)
+	alClient := metadata.NewAniListClient()
+	defer alClient.Close()
+
+	engine := ingest.NewIngestionEngine(db, 10000, 4, alClient)
 	engine.StartWorkerPool()
 
 	// 5. Mount API route paths to Go's native HTTP multiplexer.
