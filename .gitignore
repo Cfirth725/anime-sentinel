@@ -1,5 +1,5 @@
 # Configuration and Environment Secrets
-config.json
+*.json
 .env
 
 # Local SQLite Database Artifacts and WAL Journals
