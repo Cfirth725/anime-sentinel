@@ -13,9 +13,10 @@ import (
 
 // Config encapsulates environment configuration fields mapped to JSON file properties.
 type Config struct {
-	Port          string `json:"PORT"`
-	DatabasePath  string `json:"DATABASE_PATH"`
-	SQLiteWALMode bool   `json:"SQLITE_WAL_MODE"`
+	Port          string   `json:"PORT"`
+	DatabasePath  string   `json:"DATABASE_PATH"`
+	SQLiteWALMode bool     `json:"SQLITE_WAL_MODE"`
+	SeedUsers     []string `json:"SEED_USERS"`
 }
 
 // LoadConfig opens and decodes an un-tracked local JSON parameter file.
@@ -144,4 +145,74 @@ func InsertMediaCatalog(db *sql.DB, externalID string, romaji string, english st
 	}
 
 	return id, nil
+}
+
+// GetUserByUsername resolves a raw string username to its corresponding structural profile row.
+func GetUserByUsername(db *sql.DB, username string) (*models.User, error) {
+	query := `SELECT id, username, created_at FROM users WHERE LOWER(username) = LOWER(?);`
+
+	var u models.User
+	var createdAtStr string
+
+	err := db.QueryRow(query, username).Scan(&u.ID, &u.Username, &createdAtStr)
+	if err == sql.ErrNoRows {
+		return nil, nil // Profile doesn't exist yet
+	}
+	if err != nil {
+		return nil, fmt.Errorf("user identity profile resolution failure: %w", err)
+	}
+	return &u, nil
+}
+
+// UpsertWatchProgress updates a user's running checkpoint progress ledger for a given media asset.
+// It will only advance the current episode counter if the incoming episode number is greater
+// than the recorded value, protecting against out-of-order stream processing.
+func UpsertWatchProgress(db *sql.DB, userID int64, mediaID int64, episodeNum int, sentiment int) error {
+	query := `
+		INSERT INTO watch_progress (user_id, media_id, current_episode_progress, last_watched_at, sentiment)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+		ON CONFLICT(user_id, media_id) DO UPDATE SET
+			current_episode_progress = MAX(watch_progress.current_episode_progress, excluded.current_episode_progress),
+			sentiment = excluded.sentiment,
+			last_watched_at = CURRENT_TIMESTAMP;
+	`
+
+	_, err := db.Exec(query, userID, mediaID, episodeNum, sentiment)
+	if err != nil {
+		return fmt.Errorf("failed to upsert watch progress tracker state: %w", err)
+	}
+	return nil
+}
+
+// SeedDefaultUsers checks if the users table is empty and injects initial profiles
+// defined within the external configuration parameters.
+func SeedDefaultUsers(db *sql.DB, userList []string) error {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM users;").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check existing user count: %w", err)
+	}
+
+	// If users already exist, skip seeding to prevent overwriting active state
+	if count > 0 {
+		return nil
+	}
+
+	if len(userList) == 0 {
+		slog.Warn("No bootstrap users defined in configuration. Skipping seeding step.")
+		return nil
+	}
+
+	slog.Info("Base user profiles not detected. Seeding default suite accounts...")
+
+	query := `INSERT INTO users (username, created_at) VALUES (?, CURRENT_TIMESTAMP);`
+
+	for _, username := range userList {
+		if _, err := db.Exec(query, username); err != nil {
+			return fmt.Errorf("failed to seed user profile [%s]: %w", username, err)
+		}
+		slog.Info("User profile successfully bootstrapped", "username", username)
+	}
+
+	return nil
 }

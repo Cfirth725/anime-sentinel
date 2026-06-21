@@ -37,6 +37,12 @@ func main() {
 	}
 	defer db.Close()
 
+	// Pass config.SeedUsers down into the seed runner dynamically
+	if err := database.SeedDefaultUsers(db, config.SeedUsers); err != nil {
+		slog.Error("Critical Failure: User database seeding failed", "error", err)
+		os.Exit(1)
+	}
+
 	// 4. Initialize the decoupled Ingestion Engine. Passing traffic down a 10,000-capacity
 	// buffered channel allows the API to return sub-2ms responses while background workers scale.
 	alClient := metadata.NewAniListClient()

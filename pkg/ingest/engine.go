@@ -70,11 +70,24 @@ func (ie *IngestionEngine) worker(workerID int) {
 			"episode", media.EpisodeNum,
 		)
 
-		// 3. READ-THROUGH CACHE: Check local storage before executing network calls
+		// 3. USER IDENTITY RESOLUTION: Fetch the user profile row ID
+		user, err := database.GetUserByUsername(ie.db, payload.Username)
+		if err != nil {
+			slog.Error("User identification resolution error", "username", payload.Username, "error", err)
+			continue
+		}
+		if user == nil {
+			slog.Warn("Rejected ingestion processing: User profile does not exist in local database", "username", payload.Username)
+			continue
+		}
+
+		// Keep track of our relational media row ID across cache hits or misses
+		var localMediaID int64
+
+		// 4. READ-THROUGH CACHE: Check local storage before executing network calls
 		cachedMedia, err := database.GetMediaByTitle(ie.db, media.BaseTitle)
 		if err != nil {
 			slog.Error("Cache layer lookup execution failure", "title", media.BaseTitle, "error", err)
-			// Fall through to API if the cache layer safely errors out
 		}
 
 		if cachedMedia != nil {
@@ -82,47 +95,63 @@ func (ie *IngestionEngine) worker(workerID int) {
 				"worker_id", workerID,
 				"catalog_id", cachedMedia.ID,
 				"title_romaji", cachedMedia.TitleRomaji,
-				"format", cachedMedia.Format,
 			)
-			continue // SUCCESSFUL ⚡ SHORT-CIRCUIT: Pipeline task completed early!
+			localMediaID = cachedMedia.ID
+		} else {
+			slog.Debug("Cache MISS: Title not found in local catalog. Queueing for API.", "title", media.BaseTitle)
+
+			// 5. Fetch third-party metadata from AniList via throttled client on cache miss
+			aniListMedia, err := ie.alClient.FetchSeriesMetadata(media.BaseTitle)
+			if err != nil {
+				slog.Warn("Upstream external synchronization delayed or failed", "title", media.BaseTitle, "error", err)
+				continue
+			}
+
+			if aniListMedia != nil {
+				slog.Info("Cache POPULATE: Successfully synchronized tracking data with AniList API",
+					"worker_id", workerID,
+					"anilist_id", aniListMedia.ID,
+					"title_romaji", aniListMedia.Title.Romaji,
+				)
+
+				totalEpisodes := 1
+				if aniListMedia.Episodes != nil {
+					totalEpisodes = *aniListMedia.Episodes
+				}
+
+				// 6. Commit the fresh API data to our local cache catalog
+				insertedID, err := database.InsertMediaCatalog(
+					ie.db,
+					fmt.Sprintf("%d", aniListMedia.ID),
+					aniListMedia.Title.Romaji,
+					aniListMedia.Title.English,
+					aniListMedia.Format,
+					aniListMedia.Status,
+					totalEpisodes,
+				)
+				if err != nil {
+					slog.Error("Failed to write fresh upstream metadata to local cache storage", "title", media.BaseTitle, "error", err)
+					continue
+				}
+				localMediaID = insertedID
+			} else {
+				slog.Warn("Upstream match execution completed with zero results", "title", media.BaseTitle)
+				continue
+			}
 		}
 
-		// 4. Fetch third-party metadata from AniList via throttled client on cache miss
-		aniListMedia, err := ie.alClient.FetchSeriesMetadata(media.BaseTitle)
+		// 7. STATE ENGINE UPDATE: Progressively upsert running user watch tracking metrics
+		err = database.UpsertWatchProgress(ie.db, user.ID, localMediaID, media.EpisodeNum, payload.Sentiment)
 		if err != nil {
-			slog.Warn("Upstream external synchronization delayed or failed", "title", media.BaseTitle, "error", err)
+			slog.Error("Failed to commit tracking checkpoint to watch_progress ledger", "username", user.Username, "error", err)
 			continue
 		}
 
-		if aniListMedia != nil {
-			slog.Info("Cache POPULATE: Successfully synchronized tracking data with AniList API",
-				"worker_id", workerID,
-				"anilist_id", aniListMedia.ID,
-				"title_romaji", aniListMedia.Title.Romaji,
-			)
-
-			// Safely extract the episode pointer into a standard int value
-			totalEpisodes := 1
-			if aniListMedia.Episodes != nil {
-				totalEpisodes = *aniListMedia.Episodes
-			}
-
-			// 5. Commit the fresh API data to our local cache catalog for future worker lookups
-			_, err = database.InsertMediaCatalog(
-				ie.db,
-				fmt.Sprintf("%d", aniListMedia.ID), // Convert int external ID to string matching schema
-				aniListMedia.Title.Romaji,
-				aniListMedia.Title.English,
-				aniListMedia.Format,
-				aniListMedia.Status,
-				totalEpisodes,
-			)
-			if err != nil {
-				slog.Error("Failed to write fresh upstream metadata to local cache storage", "title", media.BaseTitle, "error", err)
-			}
-		} else {
-			slog.Warn("Upstream match execution completed with zero results", "title", media.BaseTitle)
-		}
+		slog.Info("Progress state updated successfully",
+			"username", user.Username,
+			"title", media.BaseTitle,
+			"episode", media.EpisodeNum,
+		)
 	}
 }
 
