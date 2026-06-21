@@ -3,6 +3,7 @@ package ingest
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -43,16 +44,15 @@ func (ie *IngestionEngine) StartWorkerPool() {
 }
 
 // Background worker method that continuously drains the central channel.
-// Running concurrently allows heavy data translations to execute without blocking the client.
+// Incorporates a read-through cache layer to shield upstream API resources.
 func (ie *IngestionEngine) worker(workerID int) {
 	slog.Debug("Worker initialized and ready", "worker_id", workerID)
 
-	// Range over the channel continuously drains items until the channel is explicitly closed.
 	for payload := range ie.queue {
-		// Execute title cleaning and normalization logic out-of-band.
+		// 1. Execute title cleaning and normalization out-of-band
 		media := parser.NormalizeWatchEntry(payload.RawTitle)
 
-		// Persist the normalized tracking metrics directly to the staging storage layer.
+		// 2. Persist the raw normalized entry to the staging history table
 		err := database.InsertIngestHistory(ie.db, payload.Username, media.BaseTitle, media.EpisodeNum, media.IsMovie, payload.Sentiment)
 		if err != nil {
 			slog.Error("Database insertion failed for staged payload item",
@@ -70,8 +70,24 @@ func (ie *IngestionEngine) worker(workerID int) {
 			"episode", media.EpisodeNum,
 		)
 
-		// Fetch third-party metadata from AniList via the throttled client.
-		// The internal time.Ticker automatically prevents workers from breaking API rate limits.
+		// 3. READ-THROUGH CACHE: Check local storage before executing network calls
+		cachedMedia, err := database.GetMediaByTitle(ie.db, media.BaseTitle)
+		if err != nil {
+			slog.Error("Cache layer lookup execution failure", "title", media.BaseTitle, "error", err)
+			// Fall through to API if the cache layer safely errors out
+		}
+
+		if cachedMedia != nil {
+			slog.Info("Cache HIT: Local metadata resolved. Bypassing upstream API.",
+				"worker_id", workerID,
+				"catalog_id", cachedMedia.ID,
+				"title_romaji", cachedMedia.TitleRomaji,
+				"format", cachedMedia.Format,
+			)
+			continue // SUCCESSFUL ⚡ SHORT-CIRCUIT: Pipeline task completed early!
+		}
+
+		// 4. Fetch third-party metadata from AniList via throttled client on cache miss
 		aniListMedia, err := ie.alClient.FetchSeriesMetadata(media.BaseTitle)
 		if err != nil {
 			slog.Warn("Upstream external synchronization delayed or failed", "title", media.BaseTitle, "error", err)
@@ -79,12 +95,31 @@ func (ie *IngestionEngine) worker(workerID int) {
 		}
 
 		if aniListMedia != nil {
-			slog.Info("Successfully synchronized tracking data with AniList API",
+			slog.Info("Cache POPULATE: Successfully synchronized tracking data with AniList API",
 				"worker_id", workerID,
 				"anilist_id", aniListMedia.ID,
 				"title_romaji", aniListMedia.Title.Romaji,
-				"format", aniListMedia.Format,
 			)
+
+			// Safely extract the episode pointer into a standard int value
+			totalEpisodes := 1
+			if aniListMedia.Episodes != nil {
+				totalEpisodes = *aniListMedia.Episodes
+			}
+
+			// 5. Commit the fresh API data to our local cache catalog for future worker lookups
+			_, err = database.InsertMediaCatalog(
+				ie.db,
+				fmt.Sprintf("%d", aniListMedia.ID), // Convert int external ID to string matching schema
+				aniListMedia.Title.Romaji,
+				aniListMedia.Title.English,
+				aniListMedia.Format,
+				aniListMedia.Status,
+				totalEpisodes,
+			)
+			if err != nil {
+				slog.Error("Failed to write fresh upstream metadata to local cache storage", "title", media.BaseTitle, "error", err)
+			}
 		} else {
 			slog.Warn("Upstream match execution completed with zero results", "title", media.BaseTitle)
 		}
