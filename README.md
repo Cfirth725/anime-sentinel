@@ -28,57 +28,45 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 
 ### Concurrent Background Processing Flow (Phase 3)
 ```
-       [Public HTTP Gateway] (POST /api/v1/ingest)
+ [Public HTTP Gateway] (POST /api/v1/ingest)
                  │
                  ▼  (Validates payloads rapidly in < 2ms)
          [Buffered Channel] (Capacity: 10,000)
                  │
-       ┌─────────┴─────────┬─────────────────┐
-       ▼                   ▼                 ▼
-  [Worker 1]          [Worker 2]        [Worker N...] (Autonomous Goroutines)
-       │                   │                 │
-       ├───────────────────┴─────────────────┤
-       ▼                                     ▼
-[Staging Storage]                     [Metadata Client]
-(SQLite WAL Engine)                   (700ms time.Ticker Throttle)
-                                             │
-                                             ▼
-                                      [AniList GraphQL API]
+        ┌─────────┴─────────┬─────────────────┐
+        ▼                   ▼                 ▼
+   [Worker 1]          [Worker 2]        [Worker N...] (Autonomous Goroutines)
+        │                   │                 │
+        ▼                   ▼                 ▼
+   [Step 1: Write Raw Staging Storage] (Every worker hits SQLite WAL Engine first)
+        │
+        ▼
+   [Step 2: Read-Through Cache Lookup] (Local Database Lookup)
+        │
+        ├────────────────⚡ HIT ─────────────────┐
+        │                                       │
+        ▼ ❌ MISS                               ▼
+   [Metadata Client]                     [Watch Progress Ledger]
+   (5s Rate-Limit Pacing)                (Direct State Engine Update)
+        │                                       ▲
+        ▼                                       │
+   [AniList GraphQL API]                        │
+        │                                       │
+        ▼                                       │
+   [Cache Populate Layer] ──────────────────────┘
+   (Persists to Local Catalog, then upserts progress)
 ```
 
 ## Core Philosophy & Constraints
-1. **Zero External Runtime Dependencies:** Built strictly using the Go standard library (`net/http`, `slog`, `regexp`, `database/sql`) to minimize container footprint and maximize execution velocity.
+1. **Zero External Runtime Dependencies:** Built strictly using the Go standard library (`net/http`, `slog`, `regexp`, `database/sql`, `sync/atomic`) to minimize container footprint and maximize execution velocity.
 2. **Implicit Engagement Tracking:** Eliminates explicit user rating matrices. Taste anchors and enjoyment metrics are calculated programmatically through completion depth **Engagement Score $\ge$ 80%**.
 3. **Decoupled Data Infrastructure:** Configuration parameters point to a central, un-tracked SQLite file using Write-Ahead Logging (`WAL` mode) to allow multi-process concurrency across the suite.
 
 ## 🛠️ Tech Stack & Runtime
-- **Language Runtime:** Go 1.24+ (Native structured logging and enhanced HTTP routing patterns)
+- **Language Runtime:** Go 1.24+ (Native structured logging, atomic concurrency primitives, and enhanced HTTP routing)
 - **Database Engine:** SQLite 3 via `github.com/mattn/go-sqlite3`
-- **Metadata Authority:** AniList GraphQL API (Enforced via safe, internal `time.Ticker` rate limiter throttled to a max of ~85 requests/minute)
+- **Metadata Authority:** AniList GraphQL API (Enforced via safe, internal cache verification backed by a 5-second adaptive worker pacing circuit breaker)
 - **Deployment Target:** Docker Multi-stage scratch container
-
-## 📂 System Topology
-```
-anime-sentinel/
-├── cmd/
-│   └── server/
-│       └── main.go       # HTTP Router & dependency injection entry point
-├── pkg/
-│   ├── database/
-│   │   ├── db.go         # SQLite engine setup & WAL configuration
-│   │   └── schema.sql    # Relational DDL tables and indexing strategies
-│   ├── ingest/
-│   │   └── engine.go     # Asynchronous channel buffer & concurrent worker pool
-│   ├── metadata/
-│   │   └── client.go     # Throttled GraphQL HTTP client with time.Ticker control
-│   ├── models/
-│   │   ├── anime.go      # Relational database struct mappings
-│   │   └── anilist.go    # Upstream GraphQL query and variable contract models
-│   └── parser/
-│       └── regex.go      # Title text cleaning & normalization engine
-├── config.json           # Local execution configuration 
-└── README.md             # Project roadmap & technical specification
-```
 
 ## 🗺️ Project Roadmap
 ### Phase 1: Core Scaffolding & Parsing (Completed)
@@ -96,7 +84,9 @@ anime-sentinel/
 ### Phase 3: The Processing Pipeline & Metadata Aggregation (Completed)
 - [x] Connect background workers to `parser.NormalizeWatchEntry` for live title transformation out-of-band.
 - [x] Implement background worker storage logic to log incoming payloads into the `ingest_staging_history` tracking tables.
-- [x] Construct a throttled GraphQL client using an internal ticker loop to execute external AniList metadata queries without breaking remote rate limits (90 requests/min maximum).
+- [x] Construct a throttled GraphQL client to execute external AniList metadata queries without breaking remote rate limits.
+- [x] Design a high-performance **Read-Through Cache Layer** to intercept redundant network calls and shield remote API quotas.
+- [x] Implement an **Atomic Idle State Monitor** utilizing `sync/atomic` CAS switches to signal real-time queue depletion via ANSI terminal visuals.
 
 ### Phase 4: Co-Viewing Intelligence Engine (Upcoming)
 - [ ] Code the taste profile calculator using the mathematical engagement index.
