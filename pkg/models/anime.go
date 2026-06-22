@@ -40,3 +40,13 @@ type WatchProgress struct {
 	LastWatchedAt          time.Time `json:"last_watched_at"`
 	Sentiment              int       `json:"sentiment"` // Synchronized state tracking flag: -1 = Bad, 0 = Neutral, 1 = Good
 }
+
+// UserEngagement represents the computed consumption depth metrics for a specific title.
+type UserEngagement struct {
+	MediaID         int64
+	BaseTitle       string
+	EpisodesWatched int
+	TotalEpisodes   int
+	Score           float64
+	IsTasteAnchor   bool
+}

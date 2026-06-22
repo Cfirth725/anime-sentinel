@@ -8,6 +8,7 @@ import (
 
 	"github.com/Cfirth725/anime-sentinel/pkg/database"
 	"github.com/Cfirth725/anime-sentinel/pkg/ingest"
+	"github.com/Cfirth725/anime-sentinel/pkg/intelligence"
 	"github.com/Cfirth725/anime-sentinel/pkg/metadata"
 )
 
@@ -62,6 +63,15 @@ func main() {
 
 	// Ingestion pipeline gateway for high-volume historical tracking data.
 	mux.HandleFunc("POST /api/v1/ingest", engine.HandleIngest)
+
+	// --- Analytical Intelligence Component ---
+	// Initialize the isolated computation layer to track engagement metrics,
+	// isolate taste profiles, and cross-reference shared user viewing habits.
+	intelEngine := intelligence.NewIntelligenceEngine(db)
+
+	// Mathematical analytical endpoint to calculate consumption depth
+	// metrics and stream high-affinity preference anchors for a profile.
+	mux.HandleFunc("GET /api/v1/analytics/taste", intelEngine.HandleGetTasteAnchors)
 
 	slog.Info("Network socket successfully bound", "port", config.Port)
 

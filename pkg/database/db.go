@@ -217,3 +217,57 @@ func SeedDefaultUsers(db *sql.DB, userList []string) error {
 
 	return nil
 }
+
+// GetUserEngagementProfiles computes the mathematical engagement depth index for all
+// media entries bound to a specific user identity.
+func GetUserEngagementProfiles(db *sql.DB, userID int64) ([]models.UserEngagement, error) {
+	query := `
+		SELECT 
+			mc.id,
+			mc.title_romaji,
+			wp.current_episode_progress,
+			mc.total_episodes_count
+		FROM watch_progress wp
+		JOIN media_catalog mc ON wp.media_id = mc.id
+		WHERE wp.user_id = ?;
+	`
+
+	rows, err := db.Query(query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute engagement profile query: %w", err)
+	}
+	defer rows.Close()
+
+	var profiles []models.UserEngagement
+
+	for rows.Next() {
+		var prof models.UserEngagement
+		err := rows.Scan(&prof.MediaID, &prof.BaseTitle, &prof.EpisodesWatched, &prof.TotalEpisodes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan engagement row: %w", err)
+		}
+
+		// ANOMALY GUARD: Prevent division by zero and cap upper bound to 100%
+		if prof.TotalEpisodes > 0 {
+			computedScore := (float64(prof.EpisodesWatched) / float64(prof.TotalEpisodes)) * 100.0
+
+			// If progress exceeds listed season metadata, clamp it to a perfect 100%
+			if computedScore > 100.0 {
+				prof.Score = 100.0
+			} else {
+				prof.Score = computedScore
+			}
+		} else {
+			prof.Score = 0.0
+		}
+
+		// Calculate threshold state dynamically based on the 80% engagement rule
+		if prof.Score >= 80.0 {
+			prof.IsTasteAnchor = true
+		}
+
+		profiles = append(profiles, prof)
+	}
+
+	return profiles, nil
+}
