@@ -13,9 +13,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS media_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT NOT NULL UNIQUE,   -- Maps directly to AniList/External API IDs
+    search_query TEXT UNIQUE,           -- Caches the original clean scraper search term
     title_romaji TEXT NOT NULL,
     title_english TEXT,
-    format TEXT CHECK(format IN ('TV', 'MOVIE', 'OVA', 'SPECIAL')),
+    format TEXT CHECK(format IN ('TV', 'MOVIE', 'OVA', 'SPECIAL', 'ONA', 'TV_SHORT')),
     status TEXT CHECK(status IN ('FINISHED', 'RELEASING', 'NOT_YET_RELEASED')),
     total_episodes_count INTEGER DEFAULT 1,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP

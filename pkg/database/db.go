@@ -93,14 +93,14 @@ func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error
 	query := `
 		SELECT id, external_id, title_romaji, title_english, format, status, total_episodes_count, updated_at
 		FROM media_catalog
-		WHERE LOWER(title_romaji) = LOWER(?) OR LOWER(title_english) = LOWER(?)
+		WHERE LOWER(search_query) = LOWER(?) OR LOWER(title_romaji) = LOWER(?) OR LOWER(title_english) = LOWER(?)
 		LIMIT 1;
 	`
 
 	var m models.MediaCatalog
 	var updatedAtStr string // Intermediate string scanner for SQLite datetime conversion
 
-	err := db.QueryRow(query, cleanTitle, cleanTitle).Scan(
+	err := db.QueryRow(query, cleanTitle, cleanTitle, cleanTitle).Scan(
 		&m.ID,
 		&m.ExternalID,
 		&m.TitleRomaji,
@@ -122,11 +122,12 @@ func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error
 }
 
 // InsertMediaCatalog populates the localized media cache layer with data fetched from upstream.
-func InsertMediaCatalog(db *sql.DB, externalID string, romaji string, english string, format string, status string, episodes int) (int64, error) {
+func InsertMediaCatalog(db *sql.DB, externalID string, searchQuery string, romaji string, english string, format string, status string, episodes int) (int64, error) {
 	query := `
-		INSERT INTO media_catalog (external_id, title_romaji, title_english, format, status, total_episodes_count, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO media_catalog (external_id, search_query, title_romaji, title_english, format, status, total_episodes_count, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(external_id) DO UPDATE SET
+			search_query = COALESCE(media_catalog.search_query, excluded.search_query),
 			title_romaji = excluded.title_romaji,
 			title_english = excluded.title_english,
 			status = excluded.status,
@@ -134,7 +135,7 @@ func InsertMediaCatalog(db *sql.DB, externalID string, romaji string, english st
 			updated_at = CURRENT_TIMESTAMP;
 	`
 
-	res, err := db.Exec(query, externalID, romaji, english, format, status, episodes)
+	res, err := db.Exec(query, externalID, searchQuery, romaji, english, format, status, episodes)
 	if err != nil {
 		return 0, fmt.Errorf("failed to commit metadata payload to media_catalog: %w", err)
 	}

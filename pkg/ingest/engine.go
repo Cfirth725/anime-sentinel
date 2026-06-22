@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Cfirth725/anime-sentinel/pkg/database"
@@ -21,6 +23,7 @@ type IngestionEngine struct {
 	queue       chan models.IngestPayload
 	workerCount int
 	alClient    *metadata.AniListClient
+	idlePrinted uint32
 }
 
 // NewIngestionEngine constructs the core pipeline component, initializing the thread-safe
@@ -104,6 +107,13 @@ func (ie *IngestionEngine) worker(workerID int) {
 			aniListMedia, err := ie.alClient.FetchSeriesMetadata(media.BaseTitle)
 			if err != nil {
 				slog.Warn("Upstream external synchronization delayed or failed", "title", media.BaseTitle, "error", err)
+
+				// ONLY sleep if it's a 429 Rate Limit block
+				if strings.Contains(err.Error(), "429") {
+					slog.Info("Rate limit hit. Pacing worker queue consumption...", "worker_id", workerID)
+					time.Sleep(5 * time.Second)
+				}
+
 				continue
 			}
 
@@ -123,6 +133,7 @@ func (ie *IngestionEngine) worker(workerID int) {
 				insertedID, err := database.InsertMediaCatalog(
 					ie.db,
 					fmt.Sprintf("%d", aniListMedia.ID),
+					media.BaseTitle,
 					aniListMedia.Title.Romaji,
 					aniListMedia.Title.English,
 					aniListMedia.Format,
@@ -152,6 +163,17 @@ func (ie *IngestionEngine) worker(workerID int) {
 			"title", media.BaseTitle,
 			"episode", media.EpisodeNum,
 		)
+
+		// 🏁 SOLID SINGLE-LINE SIGNAL
+		if len(ie.queue) == 0 {
+			if atomic.CompareAndSwapUint32(&ie.idlePrinted, 0, 1) {
+				// Removed the trailing \n since Println handles it natively
+				fmt.Println("\n\033[1;32m================ MIGRATION COMPLETELY FINISHED ================\033[0m")
+				slog.Info("Pipeline idle state achieved.")
+			}
+		} else {
+			atomic.StoreUint32(&ie.idlePrinted, 0)
+		}
 	}
 }
 
