@@ -52,11 +52,30 @@ func (ie *IngestionEngine) worker(workerID int) {
 	slog.Debug("Worker initialized and ready", "worker_id", workerID)
 
 	for payload := range ie.queue {
-		// 1. Execute title cleaning and normalization out-of-band
-		media := parser.NormalizeWatchEntry(payload.RawTitle)
+		// 1. DATA VERIFICATION (Using the refactored regex engine to normalize titles)
+		parsedMedia := parser.NormalizeWatchEntry(payload.SeriesTitle)
+		title := parsedMedia.BaseTitle
+		episode := payload.EpisodeNumber
 
 		// 2. Persist the raw normalized entry to the staging history table
-		err := database.InsertIngestHistory(ie.db, payload.Username, media.BaseTitle, media.EpisodeNum, media.IsMovie, payload.Sentiment)
+		query := `
+			INSERT INTO ingest_staging_history (
+				username, series_id, series_title, season_number, 
+				episode_number, episode_title, episode_id, watched_at, fully_watched, sentiment, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+		`
+		_, err := ie.db.Exec(query,
+			payload.Username,
+			payload.SeriesID,
+			title,
+			payload.SeasonNumber,
+			episode,
+			payload.EpisodeTitle,
+			payload.EpisodeID,
+			payload.WatchedAt,
+			payload.FullyWatched,
+			payload.Sentiment,
+		)
 		if err != nil {
 			slog.Error("Database insertion failed for staged payload item",
 				"worker_id", workerID,
@@ -69,8 +88,8 @@ func (ie *IngestionEngine) worker(workerID int) {
 		slog.Debug("Worker successfully staged payload item to storage",
 			"worker_id", workerID,
 			"user", payload.Username,
-			"normalized_title", media.BaseTitle,
-			"episode", media.EpisodeNum,
+			"normalized_title", title,
+			"episode", episode,
 		)
 
 		// 3. USER IDENTITY RESOLUTION: Fetch the user profile row ID
@@ -88,9 +107,9 @@ func (ie *IngestionEngine) worker(workerID int) {
 		var localMediaID int64
 
 		// 4. READ-THROUGH CACHE: Check local storage before executing network calls
-		cachedMedia, err := database.GetMediaByTitle(ie.db, media.BaseTitle)
+		cachedMedia, err := database.GetMediaByTitle(ie.db, title)
 		if err != nil {
-			slog.Error("Cache layer lookup execution failure", "title", media.BaseTitle, "error", err)
+			slog.Error("Cache layer lookup execution failure", "title", title, "error", err)
 		}
 
 		if cachedMedia != nil {
@@ -101,19 +120,34 @@ func (ie *IngestionEngine) worker(workerID int) {
 			)
 			localMediaID = cachedMedia.ID
 		} else {
-			slog.Debug("Cache MISS: Title not found in local catalog. Queueing for API.", "title", media.BaseTitle)
+			slog.Debug("Cache MISS: Title not found in local catalog. Queueing for API.", "title", title)
 
 			// 5. Fetch third-party metadata from AniList via throttled client on cache miss
-			aniListMedia, err := ie.alClient.FetchSeriesMetadata(media.BaseTitle)
+			aniListMedia, err := ie.alClient.FetchSeriesMetadata(title)
+
+			// --- LOCK-FREE DOUBLE CHECK LAYER ---
+			// Now that the throttling token has been acquired, check if a concurrent sibling
+			// routine successfully resolved the cache while this thread was standing in line.
+			doubleCheckMedia, checkErr := database.GetMediaByTitle(ie.db, title)
+			if checkErr == nil && doubleCheckMedia != nil {
+				slog.Info("Cache STAMPEDE MITIGATED: Local metadata resolved post-token. Bypassing API execution.",
+					"worker_id", workerID,
+					"catalog_id", doubleCheckMedia.ID,
+					"title_romaji", doubleCheckMedia.TitleRomaji,
+				)
+				localMediaID = doubleCheckMedia.ID
+				goto updateProgress // Jump over network execution and insertion directly to status tracking
+			}
+			// ------------------------------------
+
 			if err != nil {
-				slog.Warn("Upstream external synchronization delayed or failed", "title", media.BaseTitle, "error", err)
+				slog.Warn("Upstream external synchronization delayed or failed", "title", title, "error", err)
 
 				// ONLY sleep if it's a 429 Rate Limit block
 				if strings.Contains(err.Error(), "429") {
 					slog.Info("Rate limit hit. Pacing worker queue consumption...", "worker_id", workerID)
 					time.Sleep(5 * time.Second)
 				}
-
 				continue
 			}
 
@@ -133,7 +167,7 @@ func (ie *IngestionEngine) worker(workerID int) {
 				insertedID, err := database.InsertMediaCatalog(
 					ie.db,
 					fmt.Sprintf("%d", aniListMedia.ID),
-					media.BaseTitle,
+					title,
 					aniListMedia.Title.Romaji,
 					aniListMedia.Title.English,
 					aniListMedia.Format,
@@ -141,18 +175,19 @@ func (ie *IngestionEngine) worker(workerID int) {
 					totalEpisodes,
 				)
 				if err != nil {
-					slog.Error("Failed to write fresh upstream metadata to local cache storage", "title", media.BaseTitle, "error", err)
+					slog.Error("Failed to write fresh upstream metadata to local cache storage", "title", title, "error", err)
 					continue
 				}
 				localMediaID = insertedID
 			} else {
-				slog.Warn("Upstream match execution completed with zero results", "title", media.BaseTitle)
+				slog.Warn("Upstream match execution completed with zero results", "title", title)
 				continue
 			}
 		}
 
+	updateProgress: // Label anchor pointing directly to user watch record tracking
 		// 7. STATE ENGINE UPDATE: Progressively upsert running user watch tracking metrics
-		err = database.UpsertWatchProgress(ie.db, user.ID, localMediaID, media.EpisodeNum, payload.Sentiment)
+		err = database.UpsertWatchProgress(ie.db, user.ID, localMediaID, episode, payload.Sentiment)
 		if err != nil {
 			slog.Error("Failed to commit tracking checkpoint to watch_progress ledger", "username", user.Username, "error", err)
 			continue
@@ -160,14 +195,13 @@ func (ie *IngestionEngine) worker(workerID int) {
 
 		slog.Info("Progress state updated successfully",
 			"username", user.Username,
-			"title", media.BaseTitle,
-			"episode", media.EpisodeNum,
+			"title", title,
+			"episode", episode,
 		)
 
-		// 🏁 SOLID SINGLE-LINE SIGNAL
+		// SOLID SINGLE-LINE SIGNAL FOR BATCH RUN COMPLETION
 		if len(ie.queue) == 0 {
 			if atomic.CompareAndSwapUint32(&ie.idlePrinted, 0, 1) {
-				// Removed the trailing \n since Println handles it natively
 				fmt.Println("\n\033[1;32m================ MIGRATION COMPLETELY FINISHED ================\033[0m")
 				slog.Info("Pipeline idle state achieved.")
 			}
@@ -178,7 +212,7 @@ func (ie *IngestionEngine) worker(workerID int) {
 }
 
 // HandleIngest serves as the high-performance HTTP gateway loop. It decodes batches,
-// runs rapid sanity checks, and offloads payloads to the channel queue in under 2ms.
+// runs rapid sanity checks, extracts tracking headers, and offloads payloads to the channel queue.
 func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
@@ -188,24 +222,35 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Stream decode the raw array payload directly into memory models to optimize allocation
-	var payloads []models.IngestPayload
+	// Extract context attributes from URL query strings
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		http.Error(w, "Missing required 'username' query parameter", http.StatusBadRequest)
+		return
+	}
+
+	sentimentVal := 0
+	if sentimentParam := r.URL.Query().Get("sentiment"); sentimentParam != "" {
+		fmt.Sscanf(sentimentParam, "%d", &sentimentVal)
+	}
+
+	// Decode the wrapped JSON payload envelope
+	var envelope models.CrunchyrollImportEnvelope
 	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&payloads); err != nil {
-		slog.Error("Failed to decode ingestion array batch", "error", err)
+	if err := decoder.Decode(&envelope); err != nil {
+		slog.Error("Failed to decode enveloped ingestion batch", "error", err)
 		http.Error(w, "Invalid JSON structure", http.StatusBadRequest)
 		return
 	}
 
 	var acceptedCount int
-	for _, p := range payloads {
-		// Validate data boundaries rapidly before pushing data deeper into the ecosystem
-		if p.Sentiment < -1 || p.Sentiment > 1 {
-			slog.Warn("Rejected individual payload item out-of-bounds sentiment", "sentiment", p.Sentiment)
-			continue
-		}
-		if p.RawTitle == "" || p.Username == "" {
-			slog.Warn("Rejected malformed payload tracking context missing fields")
+	// Loop through the inner episodes array directly!
+	for _, p := range envelope.Episodes {
+		// Inject gateway context into each row model dynamically
+		p.Username = username
+		p.Sentiment = sentimentVal
+
+		if p.SeriesTitle == "" {
 			continue
 		}
 
@@ -231,7 +276,7 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":   "accepted",
-		"received": len(payloads),
+		"received": len(envelope.Episodes),
 		"queued":   acceptedCount,
 		"elapsed":  duration.String(),
 	})

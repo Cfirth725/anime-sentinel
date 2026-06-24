@@ -49,7 +49,7 @@ func main() {
 	alClient := metadata.NewAniListClient()
 	defer alClient.Close()
 
-	engine := ingest.NewIngestionEngine(db, 10000, 4, alClient)
+	engine := ingest.NewIngestionEngine(db, 10000, 2, alClient)
 	engine.StartWorkerPool()
 
 	// 5. Mount API route paths to Go's native HTTP multiplexer.
