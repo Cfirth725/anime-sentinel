@@ -1,3 +1,5 @@
+// Package intelligence coordinates analytical evaluation, tracking profile parsing,
+// and mathematical taste anchor processing for active viewer accounts.
 package intelligence
 
 import (
@@ -7,14 +9,15 @@ import (
 	"strconv"
 )
 
-// HandleGetTasteAnchors returns the computed mathematical taste anchors for a given user.
+// HandleGetTasteAnchors extracts and returns computed mathematical taste anchors for a given user.
+// It maps the resultant slice to JSON, defaulting to user ID 1 if no identifier is explicitly passed.
 func (ie *IntelligenceEngine) HandleGetTasteAnchors(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// For now, default to User ID 1 (Carolyn) if no ID parameter is passed
+	// Default to User ID 1 if no ID parameter is passed
 	userIDStr := r.URL.Query().Get("user_id")
 	userID := int64(1)
 	if userIDStr != "" {
@@ -32,5 +35,7 @@ func (ie *IntelligenceEngine) HandleGetTasteAnchors(w http.ResponseWriter, r *ht
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(anchors)
+	if err := json.NewEncoder(w).Encode(anchors); err != nil {
+		slog.Error("Failed to encode taste anchors payload response", "user_id", userID, "error", err)
+	}
 }

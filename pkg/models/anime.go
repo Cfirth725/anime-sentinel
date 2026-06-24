@@ -1,3 +1,5 @@
+// Package models encapsulates the core domain types, bulk payload envelopes,
+// API request/response frames, and database transfer objects used throughout the system.
 package models
 
 import "time"
@@ -54,10 +56,10 @@ type WatchProgress struct {
 
 // UserEngagement represents the computed consumption depth metrics for a specific title.
 type UserEngagement struct {
-	MediaID         int64
-	BaseTitle       string
-	EpisodesWatched int
-	TotalEpisodes   int
-	Score           float64
-	IsTasteAnchor   bool
+	MediaID         int64   `json:"media_id"`
+	BaseTitle       string  `json:"base_title"`
+	EpisodesWatched int     `json:"episodes_watched"`
+	TotalEpisodes   int     `json:"total_episodes"`
+	Score           float64 `json:"score"`
+	IsTasteAnchor   bool    `json:"is_taste_anchor"`
 }

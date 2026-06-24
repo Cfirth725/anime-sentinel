@@ -1,3 +1,5 @@
+// Package main executes the historical data translation pipeline, converting
+// multi-page raw Crunchyroll JSON data exports into a rich models.IngestPayload schema.
 package main
 
 import (
@@ -11,19 +13,22 @@ import (
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
 )
 
-// Crunchyroll Schema Mappings
+// CrHistory encapsulates a single page frame array containing tracking history data nodes.
 type CrHistory struct {
 	Data []CrItem `json:"data"`
 }
 
+// CrItem marks an intermediate payload wrapper containing an individual structural panel layout.
 type CrItem struct {
 	Panel CrPanel `json:"panel"`
 }
 
+// CrPanel holds inner media block metadata scopes mapped directly from the streaming platform.
 type CrPanel struct {
 	EpisodeMetadata CrMetadata `json:"episode_metadata"`
 }
 
+// CrMetadata targets explicit streaming details including chronological identifiers and absolute counts.
 type CrMetadata struct {
 	SeriesTitle   string  `json:"series_title"`
 	SeasonTitle   string  `json:"season_title"`
@@ -59,6 +64,7 @@ func main() {
 			meta.SeriesTitle = strings.ReplaceAll(meta.SeriesTitle, " (English Dub)", "")
 
 			// ----- MASTER CORRECTION LAYER -----
+			// Explicitly intercept and re-map absolute platform titles to uniform base variants
 			if strings.Contains(strings.ToLower(meta.SeriesTitle), "re:zero") {
 				if strings.Contains(meta.SeasonTitle, "E-EX") {
 					meta.SeriesTitle = "Re:ZERO -Starting Life in Another World-: OVAs"

@@ -1,3 +1,5 @@
+// Package parser provides text normalization utilities and pattern matching engines
+// to sanitize raw media history streams before ingestion.
 package parser
 
 import (
@@ -6,20 +8,24 @@ import (
 	"strings"
 )
 
-// NormalizedMedia represents the parsed result of a raw watch log entry.
+// NormalizedMedia represents the structural result of a parsed raw watch log entry.
 type NormalizedMedia struct {
-	BaseTitle  string
-	EpisodeNum float64
-	IsMovie    bool
+	BaseTitle  string  // The core series name stripped of metadata chunks.
+	EpisodeNum float64 // The extracted episode sequence number or fallback decimal.
+	IsMovie    bool    // True if no explicit serial episode markers were detected.
 }
 
-// Generalized expression to catch trailing season/arc/part/cour modifiers, including dashed or parenthetical iterations
-var seasonRegex = regexp.MustCompile(`(?i)\s*(?::\s*|\s+|-|\()?(?:season\s*\d+|part\s*\d+|cour\s*\d+|arc\s*\d+|specials?|\d+(?:st|nd|rd|th)\s*season)(?:\s*\))?`)
+var (
+	// seasonRegex is a generalized expression to catch trailing season/arc/part/cour modifiers,
+	// including dashed, underscored, or parenthetical iterations.
+	seasonRegex = regexp.MustCompile(`(?i)\s*(?::\s*|\s+|-|\()?(?:season\s*\d+|part\s*\d+|cour\s*\d+|arc\s*\d+|specials?|\d+(?:st|nd|rd|th)\s*season)(?:\s*\))?`)
 
-// Captures optional decimal places (e.g., "Episode 13.5" or "Ep 05")
-var episodeRegex = regexp.MustCompile(`(?i)(?:\s+episode\s+|\s+ep\s+)(\d+(?:\.\d+)?)`)
+	// episodeRegex captures serial episode progressions including optional decimal places (e.g., "Episode 13.5").
+	episodeRegex = regexp.MustCompile(`(?i)(?:\s+episode\s+|\s+ep\s+)(\d+(?:\.\d+)?)`)
+)
 
-// NormalizeWatchEntry parses raw streaming strings into clean catalog metadata
+// NormalizeWatchEntry parses raw streaming history strings into a clean, uniform metadata layout.
+// It strips out chronological markers and calculates contextual movie/series flags.
 func NormalizeWatchEntry(rawTitle string) NormalizedMedia {
 	cleaned := rawTitle
 
@@ -40,7 +46,7 @@ func NormalizeWatchEntry(rawTitle string) NormalizedMedia {
 	// 2. Strip out season subtitles/modifiers to extract the core base series title
 	cleaned = seasonRegex.ReplaceAllString(cleaned, "")
 
-	// 3. Perform final text sanitation on remaining whitespace or dangling punctuation symbols
+	// 3. Perform final text sanitation on remaining whitespace or danging punctuation symbols
 	cleaned = strings.TrimSpace(cleaned)
 	cleaned = strings.TrimSuffix(cleaned, ":")
 	cleaned = strings.TrimSuffix(cleaned, "-")

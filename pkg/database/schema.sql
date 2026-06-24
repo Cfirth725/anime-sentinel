@@ -2,17 +2,24 @@
 -- THE SENTINEL SUITE: UNIFIED CORE SCHEMA (V2 - CRUNCHY-STANDARDIZED)
 -- ====================================================================
 
+-- --------------------------------------------------------------------
 -- 1. Local User Identities
+-- Stores system account profiles responsible for active media tracking.
+-- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- --------------------------------------------------------------------
 -- 2. Normalized Media Catalog (Autonomous Cache Layer)
+-- Acts as a read-through localized lookup layer to shield upstream API resources.
+-- Utilizes strict structural checks to enforce reliable serialization formats.
+-- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS media_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,   -- Maps directly to AniList/External API IDs
+    external_id TEXT NOT NULL UNIQUE,
     cache_key TEXT UNIQUE,
     title_romaji TEXT NOT NULL,
     title_english TEXT,
@@ -22,7 +29,11 @@ CREATE TABLE IF NOT EXISTS media_catalog (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- --------------------------------------------------------------------
 -- 3. Catalog Metadata Weights for Automated Taste Profiles
+-- Maps relational category classifiers to physical catalog items.
+-- Cascade deletions ensure that orphaned tags drop cleanly if a title is removed.
+-- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS catalog_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER NOT NULL,
@@ -31,7 +42,11 @@ CREATE TABLE IF NOT EXISTS catalog_tags (
     FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
 );
 
+-- --------------------------------------------------------------------
 -- 4. Isolated User Progress Ledgers
+-- Evaluates real-time milestone checkboxes, tracking absolute episode progress decimal scales
+-- and current affinity sentiment values bound to individual unique user profiles.
+-- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS watch_progress (
     user_id INTEGER,
     media_id INTEGER,
@@ -43,7 +58,11 @@ CREATE TABLE IF NOT EXISTS watch_progress (
     FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
 );
 
+-- --------------------------------------------------------------------
 -- 5. High-Volume Ingestion Staging Table
+-- Provides an isolated raw buffer sink layer for high-throughput stream ingestion.
+-- Relaxes upstream relational constraints to allow non-blocking initial insertions.
+-- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ingest_staging_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
@@ -60,7 +79,11 @@ CREATE TABLE IF NOT EXISTS ingest_staging_history (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- --------------------------------------------------------------------
 -- 6. High-Performance Query Optimizations
+-- Explicitly constructed indexes to accelerate fast key scans, user profile updates,
+-- and background processing engine task queries.
+-- --------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_catalog_lookup ON media_catalog(external_id);
 CREATE INDEX IF NOT EXISTS idx_progress_user ON watch_progress(user_id);
 CREATE INDEX IF NOT EXISTS idx_ingest_status ON ingest_staging_history(processed_status);

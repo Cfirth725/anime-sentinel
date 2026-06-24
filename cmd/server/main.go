@@ -1,3 +1,5 @@
+// Package main initializes the application lifecycle, orchestrates dependency injection,
+// verifies localized state parameters, and binds the high-performance HTTP service gateway.
 package main
 
 import (
@@ -13,7 +15,7 @@ import (
 )
 
 func main() {
-	// 1. Initialize structured text logging. Using slog key-value pairs ensures
+	// 1. Initialize structured logging. Using slog key-value pairs ensures
 	// the application telemetry is machine-readable and ready for log aggregators.
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
@@ -49,7 +51,8 @@ func main() {
 	alClient := metadata.NewAniListClient()
 	defer alClient.Close()
 
-	engine := ingest.NewIngestionEngine(db, 10000, 2, alClient)
+	// SCALE UP FORCE: Initializing with a 4-worker pool configuration to maximize parallel tracking extraction
+	engine := ingest.NewIngestionEngine(db, 10000, 4, alClient)
 	engine.StartWorkerPool()
 
 	// 5. Mount API route paths to Go's native HTTP multiplexer.

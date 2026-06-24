@@ -1,3 +1,5 @@
+// Package metadata coordinates outbound communications, rate limiting controls,
+// and retry state engines targeting third-party streaming directories.
 package metadata
 
 import (
@@ -31,14 +33,16 @@ func NewAniListClient() *AniListClient {
 	}
 }
 
-// FetchSeriesMetadata blocks execution against the internal ticker before dispatching
-// a GraphQL request to safely search and resolve clean media metadata.
-// It incorporates an exponential backoff retry mechanism to survive upstream 429 rate limits.
-func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListMedia, error) {
-	// STOP THE THROTTLE: Park the routine until the shared ticker drops a clock token.
+// AcquireToken blocks execution against the internal shared ticker.
+// This allows background workers to pace their network access gates cooperatively.
+func (c *AniListClient) AcquireToken() {
 	<-c.ticker.C
+}
 
-	// Hardcoded GraphQL query string optimized for core title and format matching
+// FetchSeriesMetadata dispatches a GraphQL request to safely search and resolve clean media metadata.
+// Note: Callers must invoke AcquireToken() before calling this method to enforce target rate limits.
+// It incorporates an exponential backoff retry mechanism to handle upstream 429 rate limits gracefully.
+func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListMedia, error) {
 	query := `
 		query ($search: String) {
 			Media (search: $search, type: ANIME) {
@@ -54,7 +58,6 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 		}
 	`
 
-	// Build the network request frame
 	requestPayload := models.AniListRequest{
 		Query: query,
 		Variables: map[string]interface{}{
@@ -71,11 +74,9 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 	backoffDuration := 4 * time.Second
 	var resp *http.Response
 
-	// Execute the HTTP transport retry loop
 	for i := 0; i < maxRetries; i++ {
 		slog.Debug("Rate limit token acquired. Dispatching upstream metadata query", "search_title", cleanTitle, "attempt", i+1)
 
-		// Create a fresh request body reader stream for each retry attempt
 		req, err := http.NewRequest(http.MethodPost, c.endpoint, bytes.NewBuffer(bodyBytes))
 		if err != nil {
 			return nil, fmt.Errorf("failed to construct outbound HTTP request: %w", err)
@@ -89,39 +90,34 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 			return nil, fmt.Errorf("network execution failed against AniList gateway: %w", err)
 		}
 
-		// Handle 429 Rate Limits with Exponential Backoff
 		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close() // Close the body immediately since we are retrying
+			resp.Body.Close()
 
-			slog.Warn("🛑 Upstream 429 rate limit breached. Initiating cool-down backoff period...",
+			slog.Warn("Upstream 429 rate limit breached. Initiating cool-down backoff period...",
 				"title", cleanTitle,
 				"delay_seconds", backoffDuration.Seconds(),
 				"attempt", i+1,
 			)
 
 			time.Sleep(backoffDuration)
-			backoffDuration *= 2 // Double the pause duration exponentially for the next pass
+			backoffDuration *= 2
 			continue
 		}
 
-		// Break out of the retry loop if we get any other status code (200, 404, 500, etc.)
 		break
 	}
 
 	defer resp.Body.Close()
 
-	// Intercept API errors early
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("upstream API returned non-200 status code: %d", resp.StatusCode)
 	}
 
-	// Parse the response
 	var aniListResp models.AniListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&aniListResp); err != nil {
 		return nil, fmt.Errorf("failed to decode upstream JSON response structure: %w", err)
 	}
 
-	// Return the nested media struct pointer (returns nil if no matches were located)
 	return aniListResp.Data.Media, nil
 }
 

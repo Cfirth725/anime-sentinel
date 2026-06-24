@@ -1,3 +1,5 @@
+// Package ingest manages asynchronous worker pools, background task queuing,
+// and transactional data streaming gates for media payload synchronization.
 package ingest
 
 import (
@@ -46,8 +48,8 @@ func (ie *IngestionEngine) StartWorkerPool() {
 	}
 }
 
-// Background worker method that continuously drains the central channel.
-// Incorporates a read-through cache layer to shield upstream API resources.
+// worker represents an autonomous background consumer method that continuously drains the central channel.
+// It incorporates a lock-free double-check read-through cache layer to shield upstream API resources.
 func (ie *IngestionEngine) worker(workerID int) {
 	slog.Debug("Worker initialized and ready", "worker_id", workerID)
 
@@ -62,8 +64,8 @@ func (ie *IngestionEngine) worker(workerID int) {
 			INSERT INTO ingest_staging_history (
 				username, series_id, series_title, season_number, 
 				episode_number, episode_title, episode_id, watched_at, fully_watched, sentiment, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
-		`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`
+
 		_, err := ie.db.Exec(query,
 			payload.Username,
 			payload.SeriesID,
@@ -122,12 +124,13 @@ func (ie *IngestionEngine) worker(workerID int) {
 		} else {
 			slog.Debug("Cache MISS: Title not found in local catalog. Queueing for API.", "title", title)
 
-			// 5. Fetch third-party metadata from AniList via throttled client on cache miss
-			aniListMedia, err := ie.alClient.FetchSeriesMetadata(title)
+			// 5. Secure the shared rate-limiting clock token BEFORE doing anything else.
+			// This forces workers to wait in an orderly queue outside our logic.
+			ie.alClient.AcquireToken()
 
 			// --- LOCK-FREE DOUBLE CHECK LAYER ---
-			// Now that the throttling token has been acquired, check if a concurrent sibling
-			// routine successfully resolved the cache while this thread was standing in line.
+			// Now that this specific thread has acquired the token and stepped up to execution,
+			// check if a sibling worker filled the database cache while we were waiting in line!
 			doubleCheckMedia, checkErr := database.GetMediaByTitle(ie.db, title)
 			if checkErr == nil && doubleCheckMedia != nil {
 				slog.Info("Cache STAMPEDE MITIGATED: Local metadata resolved post-token. Bypassing API execution.",
@@ -136,10 +139,12 @@ func (ie *IngestionEngine) worker(workerID int) {
 					"title_romaji", doubleCheckMedia.TitleRomaji,
 				)
 				localMediaID = doubleCheckMedia.ID
-				goto updateProgress // Jump over network execution and insertion directly to status tracking
+				goto updateProgress // Jump completely over network execution directly to progress updating!
 			}
 			// ------------------------------------
 
+			// Safe to hit the network now; we hold the token and confirmed the cache is still empty
+			aniListMedia, err := ie.alClient.FetchSeriesMetadata(title)
 			if err != nil {
 				slog.Warn("Upstream external synchronization delayed or failed", "title", title, "error", err)
 
@@ -216,13 +221,11 @@ func (ie *IngestionEngine) worker(workerID int) {
 func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	// Enforce strict routing restrictions at the gateway level
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Extract context attributes from URL query strings
 	username := r.URL.Query().Get("username")
 	if username == "" {
 		http.Error(w, "Missing required 'username' query parameter", http.StatusBadRequest)
@@ -234,7 +237,6 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 		fmt.Sscanf(sentimentParam, "%d", &sentimentVal)
 	}
 
-	// Decode the wrapped JSON payload envelope
 	var envelope models.CrunchyrollImportEnvelope
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&envelope); err != nil {
@@ -244,9 +246,7 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var acceptedCount int
-	// Loop through the inner episodes array directly!
 	for _, p := range envelope.Episodes {
-		// Inject gateway context into each row model dynamically
 		p.Username = username
 		p.Sentiment = sentimentVal
 
@@ -254,8 +254,6 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 
-		// Non-blocking channel handoff. The select block attempts a direct push; if the
-		// buffer is completely full, it triggers the default fallback instantly to prevent deadlocks.
 		select {
 		case ie.queue <- p:
 			acceptedCount++
@@ -266,18 +264,17 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Calculate execution duration metrics to track ingestion pipeline efficiency
 	duration := time.Since(start)
 	slog.Info("Ingestion bulk dispatch successful", "count", acceptedCount, "duration", duration)
 
-	// Return a 202 Accepted status code to explicitly signal that the data has been
-	// securely queued for processing, allowing the client to disconnect immediately.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":   "accepted",
 		"received": len(envelope.Episodes),
 		"queued":   acceptedCount,
 		"elapsed":  duration.String(),
-	})
+	}); err != nil {
+		slog.Error("Failed to encode ingestion gateway server output response", "error", err)
+	}
 }

@@ -1,3 +1,5 @@
+// Package models encapsulates the core domain types, bulk payload envelopes,
+// API request/response frames, and database transfer objects used throughout the system.
 package models
 
 // AniListRequest encapsulates the standard GraphQL POST payload footprint.
@@ -13,7 +15,7 @@ type AniListResponse struct {
 	} `json:"data"`
 }
 
-// AniListMedia captures the specific metadata fields defined in the Phase 4 catalog schema.
+// AniListMedia captures the specific metadata fields mapped from the external third-party registry.
 type AniListMedia struct {
 	ID    int `json:"id"`
 	Title struct {
@@ -22,5 +24,5 @@ type AniListMedia struct {
 	} `json:"title"`
 	Format   string `json:"format"`
 	Status   string `json:"status"`
-	Episodes *int   `json:"episodes"` // Pointer handles cases where episode counts are null (releasing)
+	Episodes *int   `json:"episodes"` // Pointer safely absorbs JSON null values for ongoing series.
 }

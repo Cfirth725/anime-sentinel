@@ -1,3 +1,5 @@
+// Package database handles configuration loading, local storage lifecycle initialization,
+// database seeding, and transactional ledger reads/writes for user tracking state.
 package database
 
 import (
@@ -19,8 +21,8 @@ type Config struct {
 	SeedUsers     []string `json:"SEED_USERS"`
 }
 
-// LoadConfig opens and decodes an un-tracked local JSON parameter file.
-// Utilizing a stream decoder minimizes allocations compared to loading the entire file into an intermediate buffer.
+// LoadConfig opens and decodes an untracked local JSON parameter file.
+// Utilizing a stream decoder minimizes allocations compared to loading the entire file into memory.
 func LoadConfig(path string) (Config, error) {
 	var config Config
 	file, err := os.Open(path)
@@ -35,14 +37,13 @@ func LoadConfig(path string) (Config, error) {
 }
 
 // InitDB initializes the SQLite connection pool and handles schema parsing from an external file.
+// It explicitly configures WAL mode if requested to maximize database write throughput.
 func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) {
-	// 1. Establish the database engine connection pool link.
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
 
-	// 2. Configure high-concurrency multi-process Write-Ahead Logging (WAL) settings.
 	// WAL mode decouples reader and writer transactions to maximize database throughput.
 	if useWAL {
 		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
@@ -52,14 +53,12 @@ func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) 
 		slog.Info("SQLite engine initialized with Write-Ahead Logging (WAL)")
 	}
 
-	// 3. Read the external schema.sql file definition into memory.
 	schemaBytes, err := os.ReadFile(schemaFilePath)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to read schema file at %s: %w", schemaFilePath, err)
 	}
 
-	// 4. Execute the raw schema SQL statements to verify database partitions and constraints.
 	if _, err := db.Exec(string(schemaBytes)); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to execute external schema sql: %w", err)
@@ -71,20 +70,18 @@ func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) 
 
 // InsertIngestHistory inserts a rich, normalized tracking payload into the staging history table.
 func InsertIngestHistory(db *sql.DB, username string, title string, episode float64, sentiment int) error {
-	// Note: We are mocking structural keys as empty for generic single entry insertions,
-	// or you can expand this function's arguments to accept series_id, season_number, etc.
 	query := `
 		INSERT INTO ingest_staging_history (
 			username, series_id, series_title, season_number, 
 			episode_number, episode_title, episode_id, watched_at, fully_watched, sentiment, created_at
-		) VALUES (?, 'GENERIC', ?, 1, ?, 'Imported Item', 'GENERIC', CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP);
-	`
+		) VALUES (?, 'GENERIC', ?, 1, ?, 'Imported Item', 'GENERIC', CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP);`
 
 	_, err := db.Exec(query, username, title, episode, sentiment)
 	return err
 }
 
 // GetMediaByTitle queries the media_catalog cache using case-insensitive loose title matching.
+// Returns a pointer to models.MediaCatalog, or nil if no local cache hit is scored.
 func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error) {
 	query := `
 		SELECT id, external_id, title_romaji, title_english, format, status, total_episodes_count, updated_at
@@ -105,7 +102,6 @@ func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error
 		&m.TotalEpisodesCount,
 		&updatedAtStr,
 	)
-
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -117,8 +113,8 @@ func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error
 }
 
 // InsertMediaCatalog populates the localized media cache layer with data fetched from upstream.
-// It uses a deterministic query structure to guarantee the correct row ID is returned,
-// completely eliminating the race conditions caused by SQLite's LastInsertId() during UPSERT blocks.
+// It uses an explicit read-after-upsert lookup pattern to return the auto-incremented record ID,
+// avoiding driver race conditions or zero-returns caused by SQLite's LastInsertId counter during updates.
 func InsertMediaCatalog(db *sql.DB, externalID string, cacheKey string, romaji string, english string, format string, status string, episodes int) (int64, error) {
 	query := `
 		INSERT INTO media_catalog (external_id, cache_key, title_romaji, title_english, format, status, total_episodes_count, updated_at)
@@ -131,19 +127,14 @@ func InsertMediaCatalog(db *sql.DB, externalID string, cacheKey string, romaji s
 			total_episodes_count = excluded.total_episodes_count,
 			updated_at = CURRENT_TIMESTAMP;`
 
-	// 1. Run the UPSERT execution pass
-	_, err := db.Exec(query, externalID, cacheKey, romaji, english, format, status, episodes)
-	if err != nil {
+	if _, err := db.Exec(query, externalID, cacheKey, romaji, english, format, status, episodes); err != nil {
 		return 0, fmt.Errorf("failed to commit metadata payload to media_catalog: %w", err)
 	}
 
-	// 2. DETERMINISTIC LOOKUP: Instead of relying on LastInsertId(), explicitly query the
-	// unique external_id we just touched to guarantee we get the real auto-incremented database ID.
 	var actualID int64
 	idLookupQuery := `SELECT id FROM media_catalog WHERE external_id = ? LIMIT 1;`
 
-	err = db.QueryRow(idLookupQuery, externalID).Scan(&actualID)
-	if err != nil {
+	if err := db.QueryRow(idLookupQuery, externalID).Scan(&actualID); err != nil {
 		return 0, fmt.Errorf("failed to retrieve verified row id after upsert: %w", err)
 	}
 
@@ -151,6 +142,7 @@ func InsertMediaCatalog(db *sql.DB, externalID string, cacheKey string, romaji s
 }
 
 // GetUserByUsername resolves a raw string username to its corresponding structural profile row.
+// It uses a case-insensitive lookup to guarantee loose name matching safety.
 func GetUserByUsername(db *sql.DB, username string) (*models.User, error) {
 	query := `SELECT id, username, created_at FROM users WHERE LOWER(username) = LOWER(?);`
 
@@ -159,7 +151,7 @@ func GetUserByUsername(db *sql.DB, username string) (*models.User, error) {
 
 	err := db.QueryRow(query, username).Scan(&u.ID, &u.Username, &createdAtStr)
 	if err == sql.ErrNoRows {
-		return nil, nil // Profile doesn't exist yet
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("user identity profile resolution failure: %w", err)
@@ -177,11 +169,9 @@ func UpsertWatchProgress(db *sql.DB, userID int64, mediaID int64, episodeNum flo
 		ON CONFLICT(user_id, media_id) DO UPDATE SET
 			current_episode_progress = MAX(watch_progress.current_episode_progress, excluded.current_episode_progress),
 			sentiment = excluded.sentiment,
-			last_watched_at = CURRENT_TIMESTAMP;
-	`
+			last_watched_at = CURRENT_TIMESTAMP;`
 
-	_, err := db.Exec(query, userID, mediaID, episodeNum, sentiment)
-	if err != nil {
+	if _, err := db.Exec(query, userID, mediaID, episodeNum, sentiment); err != nil {
 		return fmt.Errorf("failed to upsert watch progress tracker state: %w", err)
 	}
 	return nil
@@ -191,12 +181,10 @@ func UpsertWatchProgress(db *sql.DB, userID int64, mediaID int64, episodeNum flo
 // defined within the external configuration parameters.
 func SeedDefaultUsers(db *sql.DB, userList []string) error {
 	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM users;").Scan(&count)
-	if err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM users;").Scan(&count); err != nil {
 		return fmt.Errorf("failed to check existing user count: %w", err)
 	}
 
-	// If users already exist, skip seeding to prevent overwriting active state
 	if count > 0 {
 		return nil
 	}
@@ -207,7 +195,6 @@ func SeedDefaultUsers(db *sql.DB, userList []string) error {
 	}
 
 	slog.Info("Base user profiles not detected. Seeding default suite accounts...")
-
 	query := `INSERT INTO users (username, created_at) VALUES (?, CURRENT_TIMESTAMP);`
 
 	for _, username := range userList {
@@ -221,7 +208,7 @@ func SeedDefaultUsers(db *sql.DB, userList []string) error {
 }
 
 // GetUserEngagementProfiles computes the mathematical engagement depth index for all
-// media entries bound to a specific user identity.
+// media entries bound to a specific user identity, flagging taste anchors dynamically.
 func GetUserEngagementProfiles(db *sql.DB, userID int64) ([]models.UserEngagement, error) {
 	query := `
 		SELECT 
@@ -231,8 +218,7 @@ func GetUserEngagementProfiles(db *sql.DB, userID int64) ([]models.UserEngagemen
 			mc.total_episodes_count
 		FROM watch_progress wp
 		JOIN media_catalog mc ON wp.media_id = mc.id
-		WHERE wp.user_id = ?;
-	`
+		WHERE wp.user_id = ?;`
 
 	rows, err := db.Query(query, userID)
 	if err != nil {
@@ -244,21 +230,17 @@ func GetUserEngagementProfiles(db *sql.DB, userID int64) ([]models.UserEngagemen
 
 	for rows.Next() {
 		var prof models.UserEngagement
-		var currentProgress float64 // Intermediate float scan to match the database REAL type
+		var currentProgress float64
 
-		err := rows.Scan(&prof.MediaID, &prof.BaseTitle, &currentProgress, &prof.TotalEpisodes)
-		if err != nil {
+		if err := rows.Scan(&prof.MediaID, &prof.BaseTitle, &currentProgress, &prof.TotalEpisodes); err != nil {
 			return nil, fmt.Errorf("failed to scan engagement row: %w", err)
 		}
 
-		// Map to integer conversion for backward compatibility with your models file if required
 		prof.EpisodesWatched = int(currentProgress)
 
 		// ANOMALY GUARD: Prevent division by zero and cap upper bound to 100%
 		if prof.TotalEpisodes > 0 {
 			computedScore := (float64(prof.EpisodesWatched) / float64(prof.TotalEpisodes)) * 100.0
-
-			// If progress exceeds listed season metadata, clamp it to a perfect 100%
 			if computedScore > 100.0 {
 				prof.Score = 100.0
 			} else {
