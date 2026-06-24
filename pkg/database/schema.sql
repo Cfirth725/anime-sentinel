@@ -1,19 +1,19 @@
 -- ====================================================================
--- THE SENTINEL SUITE: UNIFIED CORE SCHEMA
+-- THE SENTINEL SUITE: UNIFIED CORE SCHEMA (V2 - CRUNCHY-STANDARDIZED)
 -- ====================================================================
 
--- Local User Identities
+-- 1. Local User Identities
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Normalized Media Catalog (Autonomous Cache Layer)
+-- 2. Normalized Media Catalog (Autonomous Cache Layer)
 CREATE TABLE IF NOT EXISTS media_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT NOT NULL UNIQUE,   -- Maps directly to AniList/External API IDs
-    search_query TEXT UNIQUE,           -- Caches the original clean scraper search term
+    cache_key TEXT UNIQUE,
     title_romaji TEXT NOT NULL,
     title_english TEXT,
     format TEXT CHECK(format IN ('TV', 'MOVIE', 'OVA', 'SPECIAL', 'ONA', 'TV_SHORT')),
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS media_catalog (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Catalog Metadata Weights for Automated Taste Profiles
+-- 3. Catalog Metadata Weights for Automated Taste Profiles
 CREATE TABLE IF NOT EXISTS catalog_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER NOT NULL,
@@ -31,11 +31,11 @@ CREATE TABLE IF NOT EXISTS catalog_tags (
     FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
 );
 
--- Isolated User Progress Ledgers
+-- 4. Isolated User Progress Ledgers
 CREATE TABLE IF NOT EXISTS watch_progress (
     user_id INTEGER,
     media_id INTEGER,
-    current_episode_progress INTEGER DEFAULT 0,
+    current_episode_progress REAL DEFAULT 0.0,
     sentiment INTEGER NOT NULL CHECK(sentiment IN (-1, 0, 1)) DEFAULT 0,
     last_watched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, media_id),
@@ -43,19 +43,24 @@ CREATE TABLE IF NOT EXISTS watch_progress (
     FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
 );
 
--- High-Volume Ingestion Staging Table (Tracks normalized entries before external API sync)
+-- 5. High-Volume Ingestion Staging Table
 CREATE TABLE IF NOT EXISTS ingest_staging_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
-    normalized_title TEXT NOT NULL,
-    episode_number INTEGER NOT NULL,
-    is_movie INTEGER NOT NULL CHECK (is_movie IN (0, 1)),
+    series_id TEXT NOT NULL,
+    series_title TEXT NOT NULL,
+    season_number INTEGER NOT NULL,
+    episode_number REAL NOT NULL,
+    episode_title TEXT,
+    episode_id TEXT,
+    watched_at DATETIME NOT NULL,
+    fully_watched BOOLEAN NOT NULL CHECK (fully_watched IN (0, 1)),
     sentiment INTEGER NOT NULL CHECK (sentiment IN (-1, 0, 1)) DEFAULT 0,
     processed_status TEXT CHECK(processed_status IN ('PENDING', 'PROCESSED', 'FAILED')) DEFAULT 'PENDING',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- High-Performance Query Optimizations
+-- 6. High-Performance Query Optimizations
 CREATE INDEX IF NOT EXISTS idx_catalog_lookup ON media_catalog(external_id);
 CREATE INDEX IF NOT EXISTS idx_progress_user ON watch_progress(user_id);
 CREATE INDEX IF NOT EXISTS idx_ingest_status ON ingest_staging_history(processed_status);
