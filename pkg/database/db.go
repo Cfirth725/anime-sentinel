@@ -69,36 +69,31 @@ func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) 
 	return db, nil
 }
 
-// InsertIngestHistory inserts a normalized tracking payload into the staging history table.
-// Using explicit argument bounds enforces data integrity at the database layer.
-func InsertIngestHistory(db *sql.DB, username string, baseTitle string, episodeNum int, isMovie bool, sentiment int) error {
+// InsertIngestHistory inserts a rich, normalized tracking payload into the staging history table.
+func InsertIngestHistory(db *sql.DB, username string, title string, episode float64, sentiment int) error {
+	// Note: We are mocking structural keys as empty for generic single entry insertions,
+	// or you can expand this function's arguments to accept series_id, season_number, etc.
 	query := `
-		INSERT INTO ingest_staging_history (username, normalized_title, episode_number, is_movie, sentiment, created_at)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+		INSERT INTO ingest_staging_history (
+			username, series_id, series_title, season_number, 
+			episode_number, episode_title, episode_id, watched_at, fully_watched, sentiment, created_at
+		) VALUES (?, 'GENERIC', ?, 1, ?, 'Imported Item', 'GENERIC', CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP);
 	`
 
-	// Convert the boolean isMovie flag to an integer representation for SQLite storage compatibility
-	isMovieFlag := 0
-	if isMovie {
-		isMovieFlag = 1
-	}
-
-	_, err := db.Exec(query, username, baseTitle, episodeNum, isMovieFlag, sentiment)
+	_, err := db.Exec(query, username, title, episode, sentiment)
 	return err
 }
 
 // GetMediaByTitle queries the media_catalog cache using case-insensitive loose title matching.
-// Returns a nil pointer and nil error if the title does not exist in the local storage layer.
 func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error) {
 	query := `
 		SELECT id, external_id, title_romaji, title_english, format, status, total_episodes_count, updated_at
 		FROM media_catalog
-		WHERE LOWER(search_query) = LOWER(?) OR LOWER(title_romaji) = LOWER(?) OR LOWER(title_english) = LOWER(?)
-		LIMIT 1;
-	`
+		WHERE LOWER(cache_key) = LOWER(?) OR LOWER(title_romaji) = LOWER(?) OR LOWER(title_english) = LOWER(?)
+		LIMIT 1;`
 
 	var m models.MediaCatalog
-	var updatedAtStr string // Intermediate string scanner for SQLite datetime conversion
+	var updatedAtStr string
 
 	err := db.QueryRow(query, cleanTitle, cleanTitle, cleanTitle).Scan(
 		&m.ID,
@@ -112,40 +107,47 @@ func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.MediaCatalog, error
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, nil // Cache miss: Record safely not found
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("local media catalog cache lookup failed: %w", err)
 	}
 
-	return &m, nil // Cache hit
+	return &m, nil
 }
 
 // InsertMediaCatalog populates the localized media cache layer with data fetched from upstream.
-func InsertMediaCatalog(db *sql.DB, externalID string, searchQuery string, romaji string, english string, format string, status string, episodes int) (int64, error) {
+// It uses a deterministic query structure to guarantee the correct row ID is returned,
+// completely eliminating the race conditions caused by SQLite's LastInsertId() during UPSERT blocks.
+func InsertMediaCatalog(db *sql.DB, externalID string, cacheKey string, romaji string, english string, format string, status string, episodes int) (int64, error) {
 	query := `
-		INSERT INTO media_catalog (external_id, search_query, title_romaji, title_english, format, status, total_episodes_count, updated_at)
+		INSERT INTO media_catalog (external_id, cache_key, title_romaji, title_english, format, status, total_episodes_count, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(external_id) DO UPDATE SET
-			search_query = COALESCE(media_catalog.search_query, excluded.search_query),
+			cache_key = COALESCE(media_catalog.cache_key, excluded.cache_key),
 			title_romaji = excluded.title_romaji,
 			title_english = excluded.title_english,
 			status = excluded.status,
 			total_episodes_count = excluded.total_episodes_count,
-			updated_at = CURRENT_TIMESTAMP;
-	`
+			updated_at = CURRENT_TIMESTAMP;`
 
-	res, err := db.Exec(query, externalID, searchQuery, romaji, english, format, status, episodes)
+	// 1. Run the UPSERT execution pass
+	_, err := db.Exec(query, externalID, cacheKey, romaji, english, format, status, episodes)
 	if err != nil {
 		return 0, fmt.Errorf("failed to commit metadata payload to media_catalog: %w", err)
 	}
 
-	id, err := res.LastInsertId()
+	// 2. DETERMINISTIC LOOKUP: Instead of relying on LastInsertId(), explicitly query the
+	// unique external_id we just touched to guarantee we get the real auto-incremented database ID.
+	var actualID int64
+	idLookupQuery := `SELECT id FROM media_catalog WHERE external_id = ? LIMIT 1;`
+
+	err = db.QueryRow(idLookupQuery, externalID).Scan(&actualID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to retrieve local insertion row id: %w", err)
+		return 0, fmt.Errorf("failed to retrieve verified row id after upsert: %w", err)
 	}
 
-	return id, nil
+	return actualID, nil
 }
 
 // GetUserByUsername resolves a raw string username to its corresponding structural profile row.
@@ -168,7 +170,7 @@ func GetUserByUsername(db *sql.DB, username string) (*models.User, error) {
 // UpsertWatchProgress updates a user's running checkpoint progress ledger for a given media asset.
 // It will only advance the current episode counter if the incoming episode number is greater
 // than the recorded value, protecting against out-of-order stream processing.
-func UpsertWatchProgress(db *sql.DB, userID int64, mediaID int64, episodeNum int, sentiment int) error {
+func UpsertWatchProgress(db *sql.DB, userID int64, mediaID int64, episodeNum float64, sentiment int) error {
 	query := `
 		INSERT INTO watch_progress (user_id, media_id, current_episode_progress, last_watched_at, sentiment)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
@@ -242,10 +244,15 @@ func GetUserEngagementProfiles(db *sql.DB, userID int64) ([]models.UserEngagemen
 
 	for rows.Next() {
 		var prof models.UserEngagement
-		err := rows.Scan(&prof.MediaID, &prof.BaseTitle, &prof.EpisodesWatched, &prof.TotalEpisodes)
+		var currentProgress float64 // Intermediate float scan to match the database REAL type
+
+		err := rows.Scan(&prof.MediaID, &prof.BaseTitle, &currentProgress, &prof.TotalEpisodes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan engagement row: %w", err)
 		}
+
+		// Map to integer conversion for backward compatibility with your models file if required
+		prof.EpisodesWatched = int(currentProgress)
 
 		// ANOMALY GUARD: Prevent division by zero and cap upper bound to 100%
 		if prof.TotalEpisodes > 0 {
