@@ -66,6 +66,36 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
         [Update Progress State Engine] ───────────────► [Watch Progress Ledger]
 ```
 
+## 📊 Joint-Viewing Intelligence & Recommendation Pipeline
+```
+[Gateway Intake]
+│ GET /api/v1/analytics/shared?user_a=1&user_b=2
+▼
+[Profile Overlap Analysis]
+│ Fetch local UserEngagement profiles out-of-band
+▼
+[Mathematical Affinity Intersection]
+│ Isolate mutual taste anchors (Completion Depth >= 80%)
+│ Compute Compatibility Score: (Mutual Anchors / Total Unique Titles) * 100
+▼
+[External Relational Seed Mapping]
+│ Resolve local MediaID to string ExternalID via cache layer
+│ Select top 3 shared anchors maximum as graph query hooks
+▼
+[Cooperative Token Gate]
+│ Synchronize lookups through shared 700ms client Ticker
+▼
+[AniList Relational Edge Query]
+│ Fetch community recommendations (RATING_DESC, max 10 per seed)
+▼
+[Double-Cache Filtering & Deduplication]
+│ Verify recommended titles against both English and Romaji variants
+│ Drop title if either user has a matching record in local watch logs
+▼
+[Clean JSON Response Stream]
+└─► Return Compatibility Affinity % alongside curated recommendation nodes
+```
+
 ## Core Philosophy & Constraints
 1. **Zero External Runtime Dependencies:** Built strictly using the Go standard library (`net/http`, `slog`, `regexp`, `database/sql`, `sync/atomic`) to minimize container footprint and maximize execution velocity.
 2. **Implicit Engagement Tracking:** Eliminates explicit user rating matrices. Taste anchors and enjoyment metrics are calculated programmatically through completion depth **Engagement Score $\ge$ 80%**.
@@ -100,7 +130,7 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 - [x] Implement an **Atomic Idle State Monitor** utilizing `sync/atomic` CAS switches to signal real-time queue depletion via ANSI terminal visuals.
 - [x] Introduce an **OS Signal Interceptor** to safely close background processes and enforce explicit SQLite WAL log file collapse during server shutdowns.
 
-### Phase 4: Taste Analytical Intelligence (In Progress)
+### Phase 4: Taste Analytical Intelligence (Completed)
 - [x] Code the taste profile engine and calculate completion metrics based on the 80% engagement rule.
 - [x] Expose an analytical intelligence endpoint (`GET /api/v1/analytics/taste`) to resolve user preference anchors.
-- [ ] Implement Joint-Viewing Delta calculation endpoints (`GET /api/v1/recommendations/shared`) to discover mutual watch interests while handling release anomalies automatically.
+- [x] Implement Joint-Viewing Delta calculation endpoints (`GET /api/v1/recommendations/shared`) to discover mutual watch interests while handling release anomalies automatically.
