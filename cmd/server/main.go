@@ -20,14 +20,14 @@ import (
 )
 
 func main() {
-	// 1. Initialize structured logging. Using slog key-value pairs ensures
+	// Initialize structured logging. Using slog key-value pairs ensures
 	// the application telemetry is machine-readable and ready for log aggregators.
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 
 	slog.Info("Launching Anime Sentinel...")
 
-	// 2. Load runtime configurations. Decoupling environment parameters from
+	// Load runtime configurations. Decoupling environment parameters from
 	// the source code keeps deployment details modular and secure.
 	config, err := database.LoadConfig("config.json")
 	if err != nil {
@@ -35,7 +35,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 3. Establish storage layer connection. Initializing tables and schema
+	// Establish storage layer connection. Initializing tables and schema
 	// guards upfront to guarantee data integrity before the application accepts traffic.
 	slog.Info("Connecting to the shared suite storage layer...", "path", config.DatabasePath)
 	db, err := database.InitDB(config.DatabasePath, config.SQLiteWALMode, "pkg/database/schema.sql")
@@ -44,21 +44,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Pass config.SeedUsers down into the seed runner dynamically
+	// Dynamic dependency migration pass to seed structural environment user keys.
 	if err := database.SeedDefaultUsers(db, config.SeedUsers); err != nil {
 		db.Close()
 		slog.Error("Critical Failure: User database seeding failed", "error", err)
 		os.Exit(1)
 	}
 
-	// 4. Initialize the decoupled Ingestion Engine. Passing traffic down a 10,000-capacity
-	// buffered channel allows the API to return sub-2ms responses while background workers scale.
+	// Instantiate the background metadata synchronization client.
 	alClient := metadata.NewAniListClient()
+
+	// Initialize the decoupled Ingestion Engine. Passing traffic down a 10,000-capacity
+	// buffered channel enables sub-2ms response cycles while background routines drain the queue.
 	engine := ingest.NewIngestionEngine(db, 10000, 4, alClient)
 	engine.StartWorkerPool()
 
-	// 5. Mount API route paths to Go's native HTTP multiplexer.
+	// Initialize the analytical computation layer to track engagement metrics,
+	// isolate taste profiles, and cross-reference shared user viewing habits.
+	intelEngine := intelligence.NewIntelligenceEngine(db, alClient)
+
+	// Register API routing patterns directly to Go's native HTTP multiplexer.
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/ingest", engine.HandleIngest)
+	mux.HandleFunc("GET /api/v1/analytics/taste", intelEngine.HandleGetTasteAnchors)
+	mux.HandleFunc("GET /api/v1/analytics/shared", intelEngine.HandleGetSharedRecommendations)
 
 	// Lightweight endpoint for health checks and container liveness probes.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -66,27 +75,17 @@ func main() {
 		fmt.Fprintln(w, "💚 Anime Sentinel System Health: OPERATIONAL")
 	})
 
-	// Ingestion pipeline gateway for high-volume historical tracking data.
-	mux.HandleFunc("POST /api/v1/ingest", engine.HandleIngest)
-
-	// --- Analytical Intelligence Component ---
-	intelEngine := intelligence.NewIntelligenceEngine(db)
-
-	// Mathematical analytical endpoint to calculate consumption depth metrics.
-	mux.HandleFunc("GET /api/v1/analytics/taste", intelEngine.HandleGetTasteAnchors)
-
-	// 6. Configure the underlying HTTP Server wrapper explicitly to enable shutdown control.
+	// Configure the underlying HTTP Server wrapper to support controlled lifecycle shutdowns.
 	server := &http.Server{
 		Addr:    config.Port,
 		Handler: mux,
 	}
 
-	// 7. SETUP GRACEFUL SHUTDOWN INTERCEPTOR
-	// Create a channel to listen for OS terminal interrupts (SIGINT = Ctrl+C, SIGTERM = Kill command)
+	// Listen explicitly for operating system lifecycle terminal interrupts.
 	shutdownSignal := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignal, os.Interrupt, syscall.SIGTERM)
 
-	// Ignite the server network socket inside an independent background routine so it doesn't block main.
+	// Ignite the network listener socket in a non-blocking background routine.
 	go func() {
 		slog.Info("Network socket successfully bound", "port", config.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -95,14 +94,12 @@ func main() {
 		}
 	}()
 
-	// --- THE PARKING GATE ---
-	// Main execution pauses right here, waiting patiently until an OS shutdown signal drops into the channel!
+	// Execution pauses here, unblocking only when an active OS signal drops into the channel.
 	sig := <-shutdownSignal
 	slog.Warn("Shutdown signal received! Initiating graceful pipeline teardown...", "signal", sig.String())
 
-	// 8. TEARDOWN SEQUENCE (Executed in careful reverse order)
-
-	// A. Stop accepting new API traffic immediately. Give active requests 5 seconds to finish processing.
+	// Execute the lifecycle teardown sequence in strict reverse order of instantiation.
+	// 1. Force the gateway to stop accepting new connection threads and drain active requests.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -112,13 +109,12 @@ func main() {
 		slog.Info("HTTP gateway server stopped successfully. Gateway locked.")
 	}
 
-	// B. Close the AniList client ticker to stop token allocations and release routines.
+	// 2. Shut down the rate limiter clock to release blocked goroutines and prevent resource leaks.
 	slog.Info("Closing upstream metadata synchronization client...")
 	alClient.Close()
 
-	// C. Close the connection pool link to SQLite.
-	// Since the pipeline is completely quiet, this forces a final WAL checkpoint,
-	// flushes the -wal file logs, and collapses everything back into a single clean .db file!
+	// 3. Sever connection links to the storage layer, forcing a final database WAL checkpoint
+	// to cleanly collapse active journal files back into the core file on disk.
 	slog.Info("Flushing Write-Ahead Logs and closing state storage connection pool...")
 	if err := db.Close(); err != nil {
 		slog.Error("Error encountered while severing database pool connection", "error", err)

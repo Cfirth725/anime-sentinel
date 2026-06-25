@@ -121,6 +121,74 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 	return aniListResp.Data.Media, nil
 }
 
+// FetchRecommendationsForSeries queries AniList for highly-rated community recommendations
+// tied directly to a specific external series ID.
+func (c *AniListClient) FetchRecommendationsForSeries(externalID string) (*models.RecommendationConnection, error) {
+	query := `
+		query ($id: Int) {
+			Media (id: $id, type: ANIME) {
+				recommendations (sort: RATING_DESC, perPage: 10) {
+					nodes {
+						rating
+						mediaRecommendation {
+							id
+							title {
+								romaji
+								english
+							}
+							format
+							status
+							episodes
+						}
+					}
+				}
+			}
+		}
+	`
+
+	requestPayload := models.AniListRequest{
+		Query: query,
+		Variables: map[string]interface{}{
+			"id": externalID,
+		},
+	}
+
+	bodyBytes, err := json.Marshal(requestPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal recommendation query: %w", err)
+	}
+
+	c.AcquireToken()
+
+	req, err := http.NewRequest(http.MethodPost, c.endpoint, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("network execution failed against AniList recommendations: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upstream API returned non-200 status code: %d", resp.StatusCode)
+	}
+
+	var aniListResp models.AniListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&aniListResp); err != nil {
+		return nil, fmt.Errorf("failed to decode recommendation response: %w", err)
+	}
+
+	if aniListResp.Data.Media == nil {
+		return nil, nil
+	}
+
+	return aniListResp.Data.Media.Recommendations, nil
+}
+
 // Close teardown internal ticker instances gracefully to prevent system routine leaks.
 func (c *AniListClient) Close() {
 	c.ticker.Stop()

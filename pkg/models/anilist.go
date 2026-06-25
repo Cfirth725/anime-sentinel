@@ -22,7 +22,28 @@ type AniListMedia struct {
 		Romaji  string `json:"romaji"`
 		English string `json:"english"`
 	} `json:"title"`
-	Format   string `json:"format"`
-	Status   string `json:"status"`
-	Episodes *int   `json:"episodes"` // Pointer safely absorbs JSON null values for ongoing series.
+	Format          string                    `json:"format"`
+	Status          string                    `json:"status"`
+	Episodes        *int                      `json:"episodes"` // Pointer safely absorbs JSON null values for ongoing series.
+	Recommendations *RecommendationConnection `json:"recommendations"`
+}
+
+// RecommendationConnection encapsulates the edge framing for nested relational recommendations.
+type RecommendationConnection struct {
+	Nodes []RecommendationNode `json:"nodes"`
+}
+
+// RecommendationNode extracts the concrete media payload of a recommended asset from the API.
+type RecommendationNode struct {
+	Rating              int `json:"rating"` // The crowdsourced community approval weight
+	MediaRecommendation *struct {
+		ID    int `json:"id"`
+		Title struct {
+			Romaji  string `json:"romaji"`
+			English string `json:"english"`
+		} `json:"title"`
+		Format   string `json:"format"`
+		Status   string `json:"status"`
+		Episodes *int   `json:"episodes"`
+	} `json:"mediaRecommendation"`
 }
