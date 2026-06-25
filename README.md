@@ -26,52 +26,62 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 		└───────────────────────────────────┘
 ```
 
-### Concurrent Background Processing Flow (Phase 3)
+## Concurrent Background Processing Flow & Stampede Mitigation
 ```
- [Public HTTP Gateway] (POST /api/v1/ingest)
-                 │
-                 ▼  (Validates payloads rapidly in < 2ms)
-         [Buffered Channel] (Capacity: 10,000)
-                 │
-        ┌─────────┴─────────┬─────────────────┐
-        ▼                   ▼                 ▼
-   [Worker 1]          [Worker 2]        [Worker N...] (Autonomous Goroutines)
-        │                   │                 │
-        ▼                   ▼                 ▼
-   [Step 1: Write Raw Staging Storage] (Every worker hits SQLite WAL Engine first)
-        │
-        ▼
-   [Step 2: Read-Through Cache Lookup] (Local Database Lookup)
-        │
-        ├────────────────⚡ HIT ─────────────────┐
-        │                                       │
-        ▼ ❌ MISS                               ▼
-   [Metadata Client]                     [Watch Progress Ledger]
-   (5s Rate-Limit Pacing)                (Direct State Engine Update)
-        │                                       ▲
-        ▼                                       │
-   [AniList GraphQL API]                        │
-        │                                       │
-        ▼                                       │
-   [Cache Populate Layer] ──────────────────────┘
-   (Persists to Local Catalog, then upserts progress)
+[Gateway Intake]
+  │  POST /api/v1/ingest (Sub-2ms validation)
+  ▼
+[Buffered Channel]
+  │  Capacity: 10,000 tasks
+  ▼
+[Worker Routine Pool]
+  │  4 Parallel Goroutines draining the channel
+  ▼
+[Step 1: Staging Log]
+  │  Commit raw entry directly to 'ingest_staging_history'
+  ▼
+[Step 2: Read-Through Cache Lookup]
+  │  Check local 'media_catalog' table
+  │
+  ├───► (Cache HIT) ──────────────────────────────┐
+  │                                               │
+  └───► (Cache MISS)                              │
+        ▼                                         │
+  [Shared Token Gate]                             │
+        │  Block against 700ms internal Ticker    │
+        ▼                                         │
+  [Step 3: Lock-Free Double Check]                │
+        │  Query local DB catalog one more time   │
+        │                                         │
+        ├───► (Stampede Mitigated: HIT) ──────────┤
+        │                                         │
+        └───► (True Miss: Hit Network)            │
+              ▼                                   │
+        [AniList GraphQL API]                     │
+              │  Outbound query dispatch          │
+              ▼                                   │
+        [Cache Populate Layer]                    │
+              │  Insert new row into catalog      │
+              ▼                                   ▼
+        [Update Progress State Engine] ───────────────► [Watch Progress Ledger]
 ```
 
 ## Core Philosophy & Constraints
 1. **Zero External Runtime Dependencies:** Built strictly using the Go standard library (`net/http`, `slog`, `regexp`, `database/sql`, `sync/atomic`) to minimize container footprint and maximize execution velocity.
 2. **Implicit Engagement Tracking:** Eliminates explicit user rating matrices. Taste anchors and enjoyment metrics are calculated programmatically through completion depth **Engagement Score $\ge$ 80%**.
 3. **Decoupled Data Infrastructure:** Configuration parameters point to a central, un-tracked SQLite file using Write-Ahead Logging (`WAL` mode) to allow multi-process concurrency across the suite.
+4. **Graceful Pipeline Teardown:** Listens explicitly for OS lifecycle interrupts (`SIGINT`, `SIGTERM`). On capture, the API gateway locks down instantly, tickers drop safely, and SQLite connection pools execute a full final checkpoint—collapsing active `-wal` and `-shm` disk fragments back down into a single consolidated database file.
 
 ## 🛠️ Tech Stack & Runtime
 - **Language Runtime:** Go 1.24+ (Native structured logging, atomic concurrency primitives, and enhanced HTTP routing)
 - **Database Engine:** SQLite 3 via `github.com/mattn/go-sqlite3`
-- **Metadata Authority:** AniList GraphQL API (Enforced via safe, internal cache verification backed by a 5-second adaptive worker pacing circuit breaker)
+- **Metadata Authority:** AniList GraphQL API (Enforced via a thread-safe 700ms token ticker coordinating cooperative worker pacing below 90 reqs/min)
 - **Deployment Target:** Docker Multi-stage scratch container
 
 ## 🗺️ Project Roadmap
 ### Phase 1: Core Scaffolding & Parsing (Completed)
 - [x] Establish isolated repository workspace and module layout.
-- [x] Construct standard library network health router loop on custom port `8092`.
+- [x] Construct standard library network health router loop on custom port options.
 - [x] Author regex parser engine to strip subtitles and extract implicit media format states.
 - [x] Design externalized `schema.sql` automation script and setup concurrent SQLite WAL connection layer.
 
@@ -81,13 +91,16 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 - [x] Construct a concurrent background worker routine pool (4 workers) to process ingested payloads out-of-band using method receiver patterns.
 - [x] Implement structured logging telemetry (`slog`) throughout the boot sequence and handler loops to ensure machine-readable application metrics.
 
-### Phase 3: The Processing Pipeline & Metadata Aggregation (Completed)
+### Phase 3: Processing Pipeline, Metadata Aggregation, & Shutdown (Completed)
 - [x] Connect background workers to `parser.NormalizeWatchEntry` for live title transformation out-of-band.
 - [x] Implement background worker storage logic to log incoming payloads into the `ingest_staging_history` tracking tables.
 - [x] Construct a throttled GraphQL client to execute external AniList metadata queries without breaking remote rate limits.
 - [x] Design a high-performance **Read-Through Cache Layer** to intercept redundant network calls and shield remote API quotas.
+- [x] Integrate a lock-free **Cooperative Double-Check Mechanism** post-token retrieval to dynamically eliminate cache stampedes over concurrent bursts.
 - [x] Implement an **Atomic Idle State Monitor** utilizing `sync/atomic` CAS switches to signal real-time queue depletion via ANSI terminal visuals.
+- [x] Introduce an **OS Signal Interceptor** to safely close background processes and enforce explicit SQLite WAL log file collapse during server shutdowns.
 
-### Phase 4: Co-Viewing Intelligence Engine (Upcoming)
-- [ ] Code the taste profile calculator using the mathematical engagement index.
-- [ ] Implement the Joint-Viewing Delta calculation endpoint (`GET /api/v1/recommendations/shared`) to discover mutual watch interests while handling release anomalies automatically.
+### Phase 4: Taste Analytical Intelligence (In Progress)
+- [x] Code the taste profile engine and calculate completion metrics based on the 80% engagement rule.
+- [x] Expose an analytical intelligence endpoint (`GET /api/v1/analytics/taste`) to resolve user preference anchors.
+- [ ] Implement Joint-Viewing Delta calculation endpoints (`GET /api/v1/recommendations/shared`) to discover mutual watch interests while handling release anomalies automatically.
