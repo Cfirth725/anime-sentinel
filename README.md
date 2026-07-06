@@ -133,4 +133,4 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**â
 ### Phase 4: Taste Analytical Intelligence (Completed)
 - [x] Code the taste profile engine and calculate completion metrics based on the 80% engagement rule.
 - [x] Expose an analytical intelligence endpoint (`GET /api/v1/analytics/taste`) to resolve user preference anchors.
-- [x] Implement Joint-Viewing Delta calculation endpoints (`GET /api/v1/recommendations/shared`) to discover mutual watch interests while handling release anomalies automatically.
+- [x] Implement Joint-Viewing Delta calculation endpoints (`GET /api/v1/analytics/shared`) to cross-reference profiles, compute mutual affinity, and fetch curated external recommendations.
