@@ -25,29 +25,29 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 
-	slog.Info("Launching Anime Sentinel...")
+	slog.Info("[INIT] Launching Anime Sentinel...")
 
 	// Load runtime configurations. Decoupling environment parameters from
 	// the source code keeps deployment details modular and secure.
 	config, err := database.LoadConfig("config.json")
 	if err != nil {
-		slog.Error("Critical Failure: Unable to parse config.json", "error", err)
+		slog.Error("[ERROR] Unable to parse config.json", "error", err)
 		os.Exit(1)
 	}
 
 	// Establish storage layer connection. Initializing tables and schema
 	// guards upfront to guarantee data integrity before the application accepts traffic.
-	slog.Info("Connecting to the shared suite storage layer...", "path", config.DatabasePath)
+	slog.Info("[INIT] Connecting to the shared suite storage layer...", "path", config.DatabasePath)
 	db, err := database.InitDB(config.DatabasePath, config.SQLiteWALMode, "pkg/database/schema.sql")
 	if err != nil {
-		slog.Error("Critical Failure: Database pipeline collapse", "error", err)
+		slog.Error("[ERROR] Database pipeline collapse", "error", err)
 		os.Exit(1)
 	}
 
 	// Dynamic dependency migration pass to seed structural environment user keys.
 	if err := database.SeedDefaultUsers(db, config.SeedUsers); err != nil {
 		db.Close()
-		slog.Error("Critical Failure: User database seeding failed", "error", err)
+		slog.Error("[ERROR] User database seeding failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -87,16 +87,16 @@ func main() {
 
 	// Ignite the network listener socket in a non-blocking background routine.
 	go func() {
-		slog.Info("Network socket successfully bound", "port", config.Port)
+		slog.Info("[SERVER] Network socket successfully bound", "port", config.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("Critical Failure: Network socket server crashed", "error", err)
+			slog.Error("[ERROR] Network socket server crashed", "error", err)
 			os.Exit(1)
 		}
 	}()
 
 	// Execution pauses here, unblocking only when an active OS signal drops into the channel.
 	sig := <-shutdownSignal
-	slog.Warn("Shutdown signal received! Initiating graceful pipeline teardown...", "signal", sig.String())
+	slog.Warn("[SHUTDOWN] Shutdown signal received! Initiating graceful pipeline teardown...", "signal", sig.String())
 
 	// Execute the lifecycle teardown sequence in strict reverse order of instantiation.
 	// 1. Force the gateway to stop accepting new connection threads and drain active requests.
@@ -104,23 +104,23 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("HTTP gateway server force-closed during teardown context", "error", err)
+		slog.Error("[ERROR] HTTP gateway server force-closed during teardown context", "error", err)
 	} else {
-		slog.Info("HTTP gateway server stopped successfully. Gateway locked.")
+		slog.Info("[SHUTDOWN] HTTP gateway server stopped successfully. Gateway locked.")
 	}
 
 	// 2. Shut down the rate limiter clock to release blocked goroutines and prevent resource leaks.
-	slog.Info("Closing upstream metadata synchronization client...")
+	slog.Info("[SHUTDOWN] Closing upstream metadata synchronization client...")
 	alClient.Close()
 
 	// 3. Sever connection links to the storage layer, forcing a final database WAL checkpoint
 	// to cleanly collapse active journal files back into the core file on disk.
-	slog.Info("Flushing Write-Ahead Logs and closing state storage connection pool...")
+	slog.Info("[SHUTDOWN] Flushing Write-Ahead Logs and closing state storage connection pool...")
 	if err := db.Close(); err != nil {
-		slog.Error("Error encountered while severing database pool connection", "error", err)
+		slog.Error("[ERROR] Error encountered while severing database pool connection", "error", err)
 	} else {
-		slog.Info("Database engine disconnected cleanly. All journal files collapsed!")
+		slog.Info("[SHUTDOWN] Database engine disconnected cleanly. All journal files collapsed!")
 	}
 
-	slog.Info("Anime Sentinel shutdown complete. System offline.")
+	slog.Info("[SHUTDOWN] Anime Sentinel shutdown complete. System offline.")
 }

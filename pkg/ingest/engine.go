@@ -42,24 +42,22 @@ func NewIngestionEngine(db *sql.DB, bufferSize int, workerCount int, alClient *m
 // StartWorkerPool ignites the background routines. Using a pointer receiver (*IngestionEngine)
 // ensures reference to the engine's active channel instead of duplicating it in memory.
 func (ie *IngestionEngine) StartWorkerPool() {
-	slog.Info("Activating asynchronous worker pool...", "workers", ie.workerCount)
+	slog.Info("[INIT] Activating asynchronous worker pool...", "workers", ie.workerCount)
 	for i := 1; i <= ie.workerCount; i++ {
-		go ie.worker(i) // Spawn autonomous background threads via goroutines
+		go ie.worker(i)
 	}
 }
 
 // worker represents an autonomous background consumer method that continuously drains the central channel.
 // It incorporates a lock-free double-check read-through cache layer to shield upstream API resources.
 func (ie *IngestionEngine) worker(workerID int) {
-	slog.Debug("Worker initialized and ready", "worker_id", workerID)
+	slog.Debug("[INIT] Background routine worker pool listener initialized", "worker_id", workerID)
 
 	for payload := range ie.queue {
-		// 1. DATA VERIFICATION (Using the refactored regex engine to normalize titles)
 		parsedMedia := parser.NormalizeWatchEntry(payload.SeriesTitle)
 		title := parsedMedia.BaseTitle
 		episode := payload.EpisodeNumber
 
-		// 2. Persist the raw normalized entry to the staging history table
 		query := `
 			INSERT INTO ingest_staging_history (
 				username, series_id, series_title, season_number, 
@@ -79,7 +77,7 @@ func (ie *IngestionEngine) worker(workerID int) {
 			payload.Sentiment,
 		)
 		if err != nil {
-			slog.Error("Database insertion failed for staged payload item",
+			slog.Error("[ERROR] Local staging ledger persistence failure",
 				"worker_id", workerID,
 				"user", payload.Username,
 				"error", err,
@@ -87,77 +85,66 @@ func (ie *IngestionEngine) worker(workerID int) {
 			continue
 		}
 
-		slog.Debug("Worker successfully staged payload item to storage",
+		slog.Debug("[REALTIME] Stream payload entry staged successfully to history logs",
 			"worker_id", workerID,
 			"user", payload.Username,
 			"normalized_title", title,
 			"episode", episode,
 		)
 
-		// 3. USER IDENTITY RESOLUTION: Fetch the user profile row ID
 		user, err := database.GetUserByUsername(ie.db, payload.Username)
 		if err != nil {
-			slog.Error("User identification resolution error", "username", payload.Username, "error", err)
+			slog.Error("[ERROR] Core profile lookup failure", "username", payload.Username, "error", err)
 			continue
 		}
 		if user == nil {
-			slog.Warn("Rejected ingestion processing: User profile does not exist in local database", "username", payload.Username)
+			slog.Warn("[ERROR] Action rejected: Target username profile missing from local engine database", "username", payload.Username)
 			continue
 		}
 
-		// Keep track of our relational media row ID across cache hits or misses
 		var localMediaID int64
 
-		// 4. READ-THROUGH CACHE: Check local storage before executing network calls
 		cachedMedia, err := database.GetMediaByTitle(ie.db, title)
 		if err != nil {
-			slog.Error("Cache layer lookup execution failure", "title", title, "error", err)
+			slog.Error("[ERROR] Database cache lookup runtime failure", "title", title, "error", err)
 		}
 
 		if cachedMedia != nil {
-			slog.Info("Cache HIT: Local metadata resolved. Bypassing upstream API.",
+			slog.Info("[REALTIME] Cache HIT: Storage catalog cache verified. Bypassing upstream networking.",
 				"worker_id", workerID,
 				"catalog_id", cachedMedia.ID,
-				"title_romaji", cachedMedia.TitleRomaji,
+				"title", cachedMedia.TitleRomaji,
 			)
 			localMediaID = cachedMedia.ID
 		} else {
-			slog.Debug("Cache MISS: Title not found in local catalog. Queueing for API.", "title", title)
+			slog.Debug("[REALTIME] Cache MISS: Target missing from local catalog. Fetching external allocation.", "title", title)
 
-			// 5. Secure the shared rate-limiting clock token BEFORE doing anything else.
-			// This forces workers to wait in an orderly queue outside our logic.
 			ie.alClient.AcquireToken()
 
-			// --- LOCK-FREE DOUBLE CHECK LAYER ---
-			// Now that this specific thread has acquired the token and stepped up to execution,
-			// check if a sibling worker filled the database cache while we were waiting in line!
 			doubleCheckMedia, checkErr := database.GetMediaByTitle(ie.db, title)
 			if checkErr == nil && doubleCheckMedia != nil {
-				slog.Info("Cache STAMPEDE MITIGATED: Local metadata resolved post-token. Bypassing API execution.",
+				slog.Info("[REALTIME] Cache STAMPEDE MITIGATED: Catalog populated post-token. Network call aborted.",
 					"worker_id", workerID,
 					"catalog_id", doubleCheckMedia.ID,
-					"title_romaji", doubleCheckMedia.TitleRomaji,
+					"title", doubleCheckMedia.TitleRomaji,
 				)
 				localMediaID = doubleCheckMedia.ID
-				goto updateProgress // Jump completely over network execution directly to progress updating!
+				goto updateProgress
 			}
-			// ------------------------------------
 
-			// Safe to hit the network now; we hold the token and confirmed the cache is still empty
 			aniListMedia, err := ie.alClient.FetchSeriesMetadata(title)
 			if err != nil {
-				slog.Warn("Upstream external synchronization delayed or failed", "title", title, "error", err)
+				slog.Warn("[REALTIME] Upstream metadata synchronization network request dropped", "title", title, "error", err)
 
-				// ONLY sleep if it's a 429 Rate Limit block
 				if strings.Contains(err.Error(), "429") {
-					slog.Info("Rate limit hit. Pacing worker queue consumption...", "worker_id", workerID)
+					slog.Info("[REALTIME] Backoff signal triggered. Intercepting worker queue pace...", "worker_id", workerID)
 					time.Sleep(5 * time.Second)
 				}
 				continue
 			}
 
 			if aniListMedia != nil {
-				slog.Info("Cache POPULATE: Successfully synchronized tracking data with AniList API",
+				slog.Info("[REALTIME] Cache POPULATE: Outbound directory synchronization successful",
 					"worker_id", workerID,
 					"anilist_id", aniListMedia.ID,
 					"title_romaji", aniListMedia.Title.Romaji,
@@ -168,7 +155,6 @@ func (ie *IngestionEngine) worker(workerID int) {
 					totalEpisodes = *aniListMedia.Episodes
 				}
 
-				// 6. Commit the fresh API data to our local cache catalog
 				insertedID, err := database.InsertMediaCatalog(
 					ie.db,
 					fmt.Sprintf("%d", aniListMedia.ID),
@@ -180,35 +166,33 @@ func (ie *IngestionEngine) worker(workerID int) {
 					totalEpisodes,
 				)
 				if err != nil {
-					slog.Error("Failed to write fresh upstream metadata to local cache storage", "title", title, "error", err)
+					slog.Error("[ERROR] Cache mapping persistence layer fault", "title", title, "error", err)
 					continue
 				}
 				localMediaID = insertedID
 			} else {
-				slog.Warn("Upstream match execution completed with zero results", "title", title)
+				slog.Warn("[REALTIME] External match pass returned clean zero bounds", "title", title)
 				continue
 			}
 		}
 
-	updateProgress: // Label anchor pointing directly to user watch record tracking
-		// 7. STATE ENGINE UPDATE: Progressively upsert running user watch tracking metrics
+	updateProgress:
 		err = database.UpsertWatchProgress(ie.db, user.ID, localMediaID, episode, payload.Sentiment)
 		if err != nil {
-			slog.Error("Failed to commit tracking checkpoint to watch_progress ledger", "username", user.Username, "error", err)
+			slog.Error("[ERROR] User state tracking engine checkpoint failure", "username", user.Username, "error", err)
 			continue
 		}
 
-		slog.Info("Progress state updated successfully",
+		slog.Info("[OK] Progress tracker update transaction committed",
 			"username", user.Username,
 			"title", title,
 			"episode", episode,
 		)
 
-		// SOLID SINGLE-LINE SIGNAL FOR BATCH RUN COMPLETION
 		if len(ie.queue) == 0 {
 			if atomic.CompareAndSwapUint32(&ie.idlePrinted, 0, 1) {
 				fmt.Println("\n\033[1;32m================ MIGRATION COMPLETELY FINISHED ================\033[0m")
-				slog.Info("Pipeline idle state achieved.")
+				slog.Info("[IDLE] Processing stream exhausted. Pipeline idle state achieved.")
 			}
 		} else {
 			atomic.StoreUint32(&ie.idlePrinted, 0)
@@ -240,7 +224,7 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 	var envelope models.CrunchyrollImportEnvelope
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&envelope); err != nil {
-		slog.Error("Failed to decode enveloped ingestion batch", "error", err)
+		slog.Error("[SERVER] JSON stream decoding fault on payload envelope drop", "error", err)
 		http.Error(w, "Invalid JSON structure", http.StatusBadRequest)
 		return
 	}
@@ -258,14 +242,14 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 		case ie.queue <- p:
 			acceptedCount++
 		default:
-			slog.Error("Critical Alert: Buffer channel full! Ingestion dropping payloads.")
+			slog.Error("[ERROR] Resource bottleneck: Async core buffer channel max capacity hit. Dropping incoming packets.")
 			http.Error(w, "Server Resource Saturation: Storage Buffer Exhausted", http.StatusServiceUnavailable)
 			return
 		}
 	}
 
 	duration := time.Since(start)
-	slog.Info("Ingestion bulk dispatch successful", "count", acceptedCount, "duration", duration)
+	slog.Info("[SERVER] Batch ingestion intake dispatch successful", "count", acceptedCount, "duration", duration)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -275,6 +259,6 @@ func (ie *IngestionEngine) HandleIngest(w http.ResponseWriter, r *http.Request) 
 		"queued":   acceptedCount,
 		"elapsed":  duration.String(),
 	}); err != nil {
-		slog.Error("Failed to encode ingestion gateway server output response", "error", err)
+		slog.Error("[SERVER] Gateway serialization execution fault", "error", err)
 	}
 }

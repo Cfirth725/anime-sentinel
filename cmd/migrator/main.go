@@ -36,23 +36,22 @@ type CrMetadata struct {
 }
 
 func main() {
-	// Read your raw pasted Crunchyroll file
+	fmt.Println("[INIT] Executing historical migration utility layer...")
+
 	rawData, err := os.ReadFile("raw_crunchyroll.json")
 	if err != nil {
-		fmt.Printf("Error reading raw file: %v\n", err)
+		fmt.Printf("[ERROR] Missing source payload target: %v\n", err)
 		return
 	}
 
-	// Read as a slice of history page chunks
 	var pages []CrHistory
 	if err := json.Unmarshal(rawData, &pages); err != nil {
-		fmt.Printf("Error parsing multi-page Crunchyroll JSON: %v\n", err)
+		fmt.Printf("[ERROR] Failed to map multi-page structure into memory map models: %v\n", err)
 		return
 	}
 
 	var finalPayload []models.IngestPayload
 
-	// Loop over each page chunk, then loop over the data rows inside them
 	for _, page := range pages {
 		for _, item := range page.Data {
 			meta := item.Panel.EpisodeMetadata
@@ -93,7 +92,7 @@ func main() {
 				displayTitle = fmt.Sprintf("%s: %s", meta.SeriesTitle, displayTitle)
 			}
 
-			// 2. MASSIVE TITAN CLEANER
+			// 2. MASSIVE SERIES CLEANER
 			for i := 100; i >= 1; i-- {
 				numStr := strconv.Itoa(i)
 				displayTitle = strings.ReplaceAll(displayTitle, " Part "+numStr, "")
@@ -121,18 +120,17 @@ func main() {
 		}
 	}
 
-	// Marshal into a beautifully formatted output file
 	outBytes, err := json.MarshalIndent(finalPayload, "", "  ")
 	if err != nil {
-		fmt.Printf("Error marshaling output data: %v\n", err)
+		fmt.Printf("[ERROR] Output marshaling failure: %v\n", err)
 		return
 	}
 
 	err = os.WriteFile("crunchyroll_import.json", outBytes, 0644)
 	if err != nil {
-		fmt.Printf("Error writing clean file: %v\n", err)
+		fmt.Printf("[ERROR] Unable to commit translation back to storage sector: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Migration successful! Converted %d history logs into rich IngestPayload schema.\n", len(finalPayload))
+	fmt.Printf("[OK] Migration successful! Converted %d history logs into rich IngestPayload schema.\n", len(finalPayload))
 }

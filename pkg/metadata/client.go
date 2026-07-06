@@ -40,7 +40,7 @@ func (c *AniListClient) AcquireToken() {
 }
 
 // FetchSeriesMetadata dispatches a GraphQL request to safely search and resolve clean media metadata.
-// Note: Callers must invoke AcquireToken() before calling this method to enforce target rate limits.
+// Callers should invoke AcquireToken() before calling this method to enforce target rate limits.
 // It incorporates an exponential backoff retry mechanism to handle upstream 429 rate limits gracefully.
 func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListMedia, error) {
 	query := `
@@ -75,7 +75,7 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 	var resp *http.Response
 
 	for i := 0; i < maxRetries; i++ {
-		slog.Debug("Rate limit token acquired. Dispatching upstream metadata query", "search_title", cleanTitle, "attempt", i+1)
+		slog.Debug("[REALTIME] Rate limit token acquired. Dispatching upstream metadata query", "search_title", cleanTitle, "attempt", i+1)
 
 		req, err := http.NewRequest(http.MethodPost, c.endpoint, bytes.NewBuffer(bodyBytes))
 		if err != nil {
@@ -93,7 +93,7 @@ func (c *AniListClient) FetchSeriesMetadata(cleanTitle string) (*models.AniListM
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 
-			slog.Warn("Upstream 429 rate limit breached. Initiating cool-down backoff period...",
+			slog.Warn("[REALTIME] Upstream 429 rate limit breached. Initiating cool-down backoff period...",
 				"title", cleanTitle,
 				"delay_seconds", backoffDuration.Seconds(),
 				"attempt", i+1,
@@ -159,6 +159,8 @@ func (c *AniListClient) FetchRecommendationsForSeries(externalID string) (*model
 	}
 
 	c.AcquireToken()
+
+	slog.Debug("[REALTIME] Rate limit token acquired. Dispatching upstream relational recommendations query", "external_id", externalID)
 
 	req, err := http.NewRequest(http.MethodPost, c.endpoint, bytes.NewBuffer(bodyBytes))
 	if err != nil {

@@ -20,7 +20,7 @@ var (
 	// including dashed, underscored, or parenthetical iterations.
 	seasonRegex = regexp.MustCompile(`(?i)\s*(?::\s*|\s+|-|\()?(?:season\s*\d+|part\s*\d+|cour\s*\d+|arc\s*\d+|specials?|\d+(?:st|nd|rd|th)\s*season)(?:\s*\))?`)
 
-	// episodeRegex captures serial episode progressions including optional decimal places (e.g., "Episode 13.5").
+	// episodeRegex captures serial episode progressions including optional decimal places.
 	episodeRegex = regexp.MustCompile(`(?i)(?:\s+episode\s+|\s+ep\s+)(\d+(?:\.\d+)?)`)
 )
 
@@ -28,29 +28,28 @@ var (
 // It strips out chronological markers and calculates contextual movie/series flags.
 func NormalizeWatchEntry(rawTitle string) NormalizedMedia {
 	cleaned := rawTitle
-
-	// 1. Extract episode number if it exists before stripping general text chunks
 	episodeNum := 1.0
 	isMovie := true
 
+	// Extract the episode identifier pattern to map progress sequence and evaluate tracking format flags.
 	matches := episodeRegex.FindStringSubmatch(cleaned)
 	if len(matches) > 1 {
 		if num, err := strconv.ParseFloat(matches[1], 64); err == nil {
 			episodeNum = num
 			isMovie = false
 		}
-		// Clean the episode marker text out of the working title string
 		cleaned = episodeRegex.ReplaceAllString(cleaned, "")
 	}
 
-	// 2. Strip out season subtitles/modifiers to extract the core base series title
+	// Strip out active season subtitles and metadata modifiers to isolate the underlying base series name.
 	cleaned = seasonRegex.ReplaceAllString(cleaned, "")
 
-	// 3. Perform final text sanitation on remaining whitespace or danging punctuation symbols
+	// Perform final text sanitation to strip leading/trailing whitespace and dangling structural punctuation symbols.
 	cleaned = strings.TrimSpace(cleaned)
-	cleaned = strings.TrimSuffix(cleaned, ":")
-	cleaned = strings.TrimSuffix(cleaned, "-")
-	cleaned = strings.TrimSpace(cleaned) // Final catch for trailing space after trim
+	cleaned = strings.TrimFunc(cleaned, func(r rune) bool {
+		return r == ':' || r == '-' || r == ',' || r == '.'
+	})
+	cleaned = strings.TrimSpace(cleaned)
 
 	return NormalizedMedia{
 		BaseTitle:  cleaned,

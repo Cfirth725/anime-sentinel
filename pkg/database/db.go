@@ -50,7 +50,7 @@ func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) 
 			db.Close()
 			return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
 		}
-		slog.Info("SQLite engine initialized with Write-Ahead Logging (WAL)")
+		slog.Info("[INIT] SQLite engine initialized with Write-Ahead Logging (WAL)")
 	}
 
 	schemaBytes, err := os.ReadFile(schemaFilePath)
@@ -64,7 +64,7 @@ func InitDB(dbPath string, useWAL bool, schemaFilePath string) (*sql.DB, error) 
 		return nil, fmt.Errorf("failed to execute external schema sql: %w", err)
 	}
 
-	slog.Info("Database schema and indexing verified successfully")
+	slog.Info("[INIT] Database schema and indexing verified successfully")
 	return db, nil
 }
 
@@ -190,18 +190,18 @@ func SeedDefaultUsers(db *sql.DB, userList []string) error {
 	}
 
 	if len(userList) == 0 {
-		slog.Warn("No bootstrap users defined in configuration. Skipping seeding step.")
+		slog.Warn("[INIT] No bootstrap users defined in configuration. Skipping seeding step.")
 		return nil
 	}
 
-	slog.Info("Base user profiles not detected. Seeding default suite accounts...")
+	slog.Info("[INIT] Base user profiles not detected. Seeding default suite accounts...")
 	query := `INSERT INTO users (username, created_at) VALUES (?, CURRENT_TIMESTAMP);`
 
 	for _, username := range userList {
 		if _, err := db.Exec(query, username); err != nil {
 			return fmt.Errorf("failed to seed user profile [%s]: %w", username, err)
 		}
-		slog.Info("User profile successfully bootstrapped", "username", username)
+		slog.Info("[OK] User profile successfully bootstrapped", "username", username)
 	}
 
 	return nil

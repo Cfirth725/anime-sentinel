@@ -29,14 +29,14 @@ func (ie *IntelligenceEngine) HandleGetTasteAnchors(w http.ResponseWriter, r *ht
 
 	anchors, err := ie.ExtractTasteAnchors(userID)
 	if err != nil {
-		slog.Error("Failed to extract taste anchors", "user_id", userID, "error", err)
+		slog.Error("[ERROR] Failed to extract taste anchors", "user_id", userID, "error", err)
 		http.Error(w, "Internal server error calculating analytics", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(anchors); err != nil {
-		slog.Error("Failed to encode taste anchors payload response", "user_id", userID, "error", err)
+		slog.Error("[ERROR] Failed to encode taste anchors payload response", "user_id", userID, "error", err)
 	}
 }
 
@@ -64,9 +64,11 @@ func (ie *IntelligenceEngine) HandleGetSharedRecommendations(w http.ResponseWrit
 		return
 	}
 
+	slog.Info("[SERVER] Executing shared recommendation metrics pass", "user_a", userAID, "user_b", userBID)
+
 	affinity, recommendations, err := ie.CalculateSharedRecommendations(userAID, userBID)
 	if err != nil {
-		slog.Error("Failed to compute joint-viewing metrics", "user_a", userAID, "user_b", userBID, "error", err)
+		slog.Error("[ERROR] Failed to compute joint-viewing metrics", "user_a", userAID, "user_b", userBID, "error", err)
 		http.Error(w, "Internal calculation error aggregating external recommendations", http.StatusInternalServerError)
 		return
 	}
@@ -84,6 +86,6 @@ func (ie *IntelligenceEngine) HandleGetSharedRecommendations(w http.ResponseWrit
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(responsePayload); err != nil {
-		slog.Error("Failed to encode joint recommendation JSON response", "error", err)
+		slog.Error("[ERROR] Failed to encode joint recommendation JSON response", "error", err)
 	}
 }
