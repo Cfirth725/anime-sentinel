@@ -100,7 +100,8 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 1. **Zero External Runtime Dependencies:** Built strictly using the Go standard library (`net/http`, `slog`, `regexp`, `database/sql`, `sync/atomic`) to minimize container footprint and maximize execution velocity.
 2. **Implicit Engagement Tracking:** Eliminates explicit user rating matrices. Taste anchors and enjoyment metrics are calculated programmatically through completion depth **Engagement Score $\ge$ 80%**.
 3. **Decoupled Data Infrastructure:** Configuration parameters point to a central, un-tracked SQLite file using Write-Ahead Logging (`WAL` mode) to allow multi-process concurrency across the suite.
-4. **Graceful Pipeline Teardown:** Listens explicitly for OS lifecycle interrupts (`SIGINT`, `SIGTERM`). On capture, the API gateway locks down instantly, tickers drop safely, and SQLite connection pools execute a full final checkpoint—collapsing active `-wal` and `-shm` disk fragments back down into a single consolidated database file.
+4. **Structured DevOps Telemetry:** Built with consistent, scannable log tokens (`[INIT]`, `[SECURE]`, `[IDLE]`, `[REALTIME]`, `[SERVER]`, `[OK]`, `[ERROR]`, `[SHUTDOWN]`) for clean, production-grade terminal visibility.
+5. **Graceful Pipeline Teardown:** Listens explicitly for OS lifecycle interrupts (`SIGINT`, `SIGTERM`). On capture, the API gateway locks down instantly, tickers drop safely, and SQLite connection pools execute a full final checkpoint—collapsing active `-wal` and `-shm` disk fragments back down into a single consolidated database file.
 
 ## 🛠️ Tech Stack & Runtime
 - **Language Runtime:** Go 1.24+ (Native structured logging, atomic concurrency primitives, and enhanced HTTP routing)
