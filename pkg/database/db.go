@@ -140,9 +140,18 @@ func InsertIngestHistory(db *sql.DB, username string, title string, episode floa
 // Returns a pointer to models.AnimeCatalog, or nil if no local cache hit is scored.
 func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.AnimeCatalog, error) {
 	query := `
-		SELECT id, external_id, title_romaji, title_english, format, status, total_episodes_count, updated_at
-		FROM anime_catalog
-		WHERE LOWER(cache_key) = LOWER(?) OR LOWER(title_romaji) = LOWER(?) OR LOWER(title_english) = LOWER(?)
+		SELECT 
+			ac.id, 
+			ac.external_id, 
+			ac.title_romaji, 
+			ac.title_english, 
+			ac.format, 
+			ac.status, 
+			COALESCE(ad.total_episodes_count, 1), 
+			ac.updated_at
+		FROM anime_catalog ac
+		LEFT JOIN anime_catalog_depths ad ON ac.id = ad.anime_id
+		WHERE LOWER(ac.cache_key) = LOWER(?) OR LOWER(ac.title_romaji) = LOWER(?) OR LOWER(ac.title_english) = LOWER(?)
 		LIMIT 1;`
 
 	var m models.AnimeCatalog
@@ -169,29 +178,51 @@ func GetMediaByTitle(db *sql.DB, cleanTitle string) (*models.AnimeCatalog, error
 }
 
 // InsertMediaCatalog populates the localized anime cache layer with data fetched from upstream.
-// It uses an explicit read-after-upsert lookup pattern to return the auto-incremented record ID,
-// avoiding driver race conditions or zero-returns caused by SQLite's LastInsertId counter during updates.
+// It performs a transactional upsert to both anime_catalog (metadata) and anime_catalog_depths (episodic limits),
+// returning the verified internal row ID of the catalog asset.
 func InsertMediaCatalog(db *sql.DB, externalID string, cacheKey string, romaji string, english string, format string, status string, episodes int) (int64, error) {
-	query := `
-		INSERT INTO anime_catalog (external_id, cache_key, title_romaji, title_english, format, status, total_episodes_count, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin catalog transaction: %w", err)
+	}
+	defer tx.Rollback() // Safe to defer; no-op if the transaction is committed
+
+	// Step A: Upsert metadata into anime_catalog
+	catalogQuery := `
+		INSERT INTO anime_catalog (external_id, cache_key, title_romaji, title_english, format, status, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(external_id) DO UPDATE SET
 			cache_key = COALESCE(anime_catalog.cache_key, excluded.cache_key),
 			title_romaji = excluded.title_romaji,
 			title_english = excluded.title_english,
 			status = excluded.status,
-			total_episodes_count = excluded.total_episodes_count,
 			updated_at = CURRENT_TIMESTAMP;`
 
-	if _, err := db.Exec(query, externalID, cacheKey, romaji, english, format, status, episodes); err != nil {
-		return 0, fmt.Errorf("failed to commit metadata payload to anime_catalog: %w", err)
+	if _, err := tx.Exec(catalogQuery, externalID, cacheKey, romaji, english, format, status); err != nil {
+		return 0, fmt.Errorf("failed to upsert anime_catalog row metadata: %w", err)
 	}
 
+	// Step B: Retrieve the row ID of the catalog asset
 	var actualID int64
 	idLookupQuery := `SELECT id FROM anime_catalog WHERE external_id = ? LIMIT 1;`
+	if err := tx.QueryRow(idLookupQuery, externalID).Scan(&actualID); err != nil {
+		return 0, fmt.Errorf("failed to retrieve row id during transactional insert: %w", err)
+	}
 
-	if err := db.QueryRow(idLookupQuery, externalID).Scan(&actualID); err != nil {
-		return 0, fmt.Errorf("failed to retrieve verified row id after upsert: %w", err)
+	// Step C: Upsert the episodic depth bounds into anime_catalog_depths
+	depthQuery := `
+		INSERT INTO anime_catalog_depths (anime_id, total_episodes_count)
+		VALUES (?, ?)
+		ON CONFLICT(anime_id) DO UPDATE SET
+			total_episodes_count = excluded.total_episodes_count;`
+
+	if _, err := tx.Exec(depthQuery, actualID, episodes); err != nil {
+		return 0, fmt.Errorf("failed to upsert anime_catalog_depths row: %w", err)
+	}
+
+	// Step D: Commit the complete changes to disk safely
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit catalog transaction: %w", err)
 	}
 
 	return actualID, nil
@@ -223,9 +254,10 @@ func GetUserEngagementProfiles(db *sql.DB, userID int64) ([]models.UserEngagemen
 			ac.id,
 			ac.title_romaji,
 			wp.current_episode_progress,
-			ac.total_episodes_count
+			COALESCE(ad.total_episodes_count, 1)
 		FROM anime_watch_progress wp
 		JOIN anime_catalog ac ON wp.anime_id = ac.id
+		LEFT JOIN anime_catalog_depths ad ON ac.id = ad.anime_id
 		WHERE wp.user_id = ?;`
 
 	rows, err := db.Query(query, userID)

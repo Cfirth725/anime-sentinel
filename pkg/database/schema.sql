@@ -1,5 +1,5 @@
 -- ====================================================================
--- THE SENTINEL SUITE: UNIFIED ANIME EXTENSION SCHEMA (V2 - STANDARDIZED)
+-- THE SENTINEL SUITE: UNIFIED ANIME EXTENSION SCHEMA (V2.1 - SPLIT CACHE)
 -- ====================================================================
 
 -- --------------------------------------------------------------------
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- --------------------------------------------------------------------
 --       -- NORMALIZED ANIME CATALOG (AUTONOMOUS CACHE LAYER) --
 -- Acts as a read-through localized lookup layer to shield AniList API quotas.
--- Flexible string definitions accommodate crowdsourced upstream metadata variations.
+-- Core metadata table tracks titles, media format, and status fields.
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS anime_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,8 +26,18 @@ CREATE TABLE IF NOT EXISTS anime_catalog (
     title_english TEXT,                      -- Official english presentation title
     format TEXT CHECK(format IN ('TV', 'MOVIE', 'OVA', 'SPECIAL', 'ONA', 'TV_SHORT')),
     status TEXT CHECK(status IN ('FINISHED', 'RELEASING', 'NOT_YET_RELEASED')),
-    total_episodes_count INTEGER DEFAULT 1,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --------------------------------------------------------------------
+--        -- CATALOG EPISODIC DEPTHS (EPISODIC CACHE LAYER) --
+-- Maps the expected total episode counts to individual catalog items.
+-- Decoupling this enables future-proof tracking of multi-arc metadata.
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS anime_catalog_depths (
+    anime_id INTEGER PRIMARY KEY,
+    total_episodes_count INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY(anime_id) REFERENCES anime_catalog(id) ON DELETE CASCADE
 );
 
 -- --------------------------------------------------------------------
