@@ -13,6 +13,10 @@ import (
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
 )
 
+// ====================================================================
+//                -- CLIENT CONFIGURATION & INTAKE --
+// ====================================================================
+
 // AniListClient coordinates throttled outbound communication with the AniList GraphQL API.
 type AniListClient struct {
 	httpClient *http.Client
@@ -38,6 +42,15 @@ func NewAniListClient() *AniListClient {
 func (c *AniListClient) AcquireToken() {
 	<-c.ticker.C
 }
+
+// Close teardown internal ticker instances gracefully to prevent system routine leaks.
+func (c *AniListClient) Close() {
+	c.ticker.Stop()
+}
+
+// ====================================================================
+//             -- OUTBOUND EXTERNAL API SYNCHRONIZERS --
+// ====================================================================
 
 // FetchSeriesMetadata dispatches a GraphQL request to safely search and resolve clean media metadata.
 // Callers should invoke AcquireToken() before calling this method to enforce target rate limits.
@@ -189,9 +202,4 @@ func (c *AniListClient) FetchRecommendationsForSeries(externalID string) (*model
 	}
 
 	return aniListResp.Data.Media.Recommendations, nil
-}
-
-// Close teardown internal ticker instances gracefully to prevent system routine leaks.
-func (c *AniListClient) Close() {
-	c.ticker.Stop()
 }

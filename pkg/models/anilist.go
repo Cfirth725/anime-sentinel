@@ -2,6 +2,10 @@
 // API request/response frames, and database transfer objects used throughout the system.
 package models
 
+// ====================================================================
+//             -- UPSTREAM ANILIST GRAPHQL CONTRACTS --
+// ====================================================================
+
 // AniListRequest encapsulates the standard GraphQL POST payload footprint.
 type AniListRequest struct {
 	Query     string                 `json:"query"`
@@ -15,6 +19,10 @@ type AniListResponse struct {
 	} `json:"data"`
 }
 
+// ====================================================================
+//             -- UPSTREAM ANILIST CATALOG DATA SHAPES --
+// ====================================================================
+
 // AniListMedia captures the specific metadata fields mapped from the external third-party registry.
 type AniListMedia struct {
 	ID    int `json:"id"`
@@ -27,6 +35,10 @@ type AniListMedia struct {
 	Episodes        *int                      `json:"episodes"` // Pointer safely absorbs JSON null values for ongoing series.
 	Recommendations *RecommendationConnection `json:"recommendations"`
 }
+
+// ====================================================================
+//             -- UPSTREAM ANILIST RELATIONAL EDGES --
+// ====================================================================
 
 // RecommendationConnection encapsulates the edge framing for nested relational recommendations.
 type RecommendationConnection struct {

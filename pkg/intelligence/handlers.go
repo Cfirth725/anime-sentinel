@@ -10,6 +10,10 @@ import (
 	"strconv"
 )
 
+// ====================================================================
+//                -- HTTP PUBLIC ANALYTICS ENTRYPOINTS --
+// ====================================================================
+
 // HandleGetTasteAnchors extracts and returns computed mathematical taste anchors for a given user.
 // It maps the resultant slice to JSON, defaulting to user ID 1 if no identifier is explicitly passed.
 func (ie *IntelligenceEngine) HandleGetTasteAnchors(w http.ResponseWriter, r *http.Request) {

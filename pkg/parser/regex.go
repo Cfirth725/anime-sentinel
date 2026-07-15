@@ -15,6 +15,10 @@ type NormalizedMedia struct {
 	IsMovie    bool    // True if no explicit serial episode markers were detected.
 }
 
+// ====================================================================
+//             -- COMPILED SEQUENCE MATCH PATTERNS (REGEX) --
+// ====================================================================
+
 var (
 	// seasonRegex is a generalized expression to catch trailing season/arc/part/cour modifiers,
 	// including dashed, underscored, or parenthetical iterations.
@@ -23,6 +27,10 @@ var (
 	// episodeRegex captures serial episode progressions including optional decimal places.
 	episodeRegex = regexp.MustCompile(`(?i)(?:\s+episode\s+|\s+ep\s+)(\d+(?:\.\d+)?)`)
 )
+
+// ====================================================================
+//             -- PUBLIC TEXTUAL NORMALIZATION LOGIC --
+// ====================================================================
 
 // NormalizeWatchEntry parses raw streaming history strings into a clean, uniform metadata layout.
 // It strips out chronological markers and calculates contextual movie/series flags.

@@ -18,6 +18,10 @@ import (
 	"github.com/Cfirth725/anime-sentinel/pkg/parser"
 )
 
+// ====================================================================
+//                -- ENGINE STRUCT & INITIALIZATION --
+// ====================================================================
+
 // IngestionEngine manages the thread-safe async buffer queue and orchestrates
 // background database workers, decoupling the API from the storage layer.
 type IngestionEngine struct {
@@ -48,6 +52,10 @@ func (ie *IngestionEngine) StartWorkerPool() {
 	}
 }
 
+// ====================================================================
+//             -- BACKGROUND ASYNC ROUTINE WORKER POOLS --
+// ====================================================================
+
 // worker represents an autonomous background consumer method that continuously drains the central channel.
 // It incorporates a lock-free double-check read-through cache layer to shield upstream API resources.
 func (ie *IngestionEngine) worker(workerID int) {
@@ -59,7 +67,7 @@ func (ie *IngestionEngine) worker(workerID int) {
 		episode := payload.EpisodeNumber
 
 		query := `
-			INSERT INTO ingest_staging_history (
+			INSERT INTO anime_ingest_staging_history (
 				username, series_id, series_title, season_number, 
 				episode_number, episode_title, episode_id, watched_at, fully_watched, sentiment, created_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`
@@ -199,6 +207,10 @@ func (ie *IngestionEngine) worker(workerID int) {
 		}
 	}
 }
+
+// ====================================================================
+//                -- HTTP PUBLIC ENTRYWAYS & GATES --
+// ====================================================================
 
 // HandleIngest serves as the high-performance HTTP gateway loop. It decodes batches,
 // runs rapid sanity checks, extracts tracking headers, and offloads payloads to the channel queue.

@@ -13,6 +13,10 @@ import (
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
 )
 
+// ====================================================================
+//             -- RAW PLATFORM METADATA SOURCE MODELS --
+// ====================================================================
+
 // CrHistory encapsulates a single page frame array containing tracking history data nodes.
 type CrHistory struct {
 	Data []CrItem `json:"data"`
@@ -34,6 +38,10 @@ type CrMetadata struct {
 	SeasonTitle   string  `json:"season_title"`
 	EpisodeNumber float64 `json:"episode_number"`
 }
+
+// ====================================================================
+//             -- MIGRATION TRANSLATION CORE RUNTIME --
+// ====================================================================
 
 func main() {
 	fmt.Println("[INIT] Executing historical migration utility layer...")

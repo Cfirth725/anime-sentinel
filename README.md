@@ -29,41 +29,41 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 ## Concurrent Background Processing Flow & Stampede Mitigation
 ```
 [Gateway Intake]
-  │  POST /api/v1/ingest (Sub-2ms validation)
-  ▼
+ │  POST /api/v1/ingest (Sub-2ms validation)
+ ▼
 [Buffered Channel]
-  │  Capacity: 10,000 tasks
-  ▼
+ │  Capacity: 10,000 tasks
+ ▼
 [Worker Routine Pool]
-  │  4 Parallel Goroutines draining the channel
-  ▼
+ │  4 Parallel Goroutines draining the channel
+ ▼
 [Step 1: Staging Log]
-  │  Commit raw entry directly to 'ingest_staging_history'
-  ▼
+ │  Commit raw entry directly to 'anime_ingest_staging_history'
+ ▼
 [Step 2: Read-Through Cache Lookup]
-  │  Check local 'media_catalog' table
-  │
-  ├───► (Cache HIT) ──────────────────────────────┐
-  │                                               │
-  └───► (Cache MISS)                              │
-        ▼                                         │
-  [Shared Token Gate]                             │
-        │  Block against 700ms internal Ticker    │
-        ▼                                         │
-  [Step 3: Lock-Free Double Check]                │
-        │  Query local DB catalog one more time   │
-        │                                         │
-        ├───► (Stampede Mitigated: HIT) ──────────┤
-        │                                         │
-        └───► (True Miss: Hit Network)            │
-              ▼                                   │
-        [AniList GraphQL API]                     │
-              │  Outbound query dispatch          │
-              ▼                                   │
-        [Cache Populate Layer]                    │
-              │  Insert new row into catalog      │
-              ▼                                   ▼
-        [Update Progress State Engine] ───────────────► [Watch Progress Ledger]
+ │  Check local 'anime_catalog' table via Normalized lower-case CacheKey
+ │
+ ├───► (Cache HIT) -------------------------------------------------┐
+ │                                                                  │
+ └───► (Cache MISS)                                                 │
+        ▼                                                           │
+ [Shared Token Gate]                                                │
+        │  Block against 700ms internal Ticker                      │
+        ▼                                                           │
+ [Step 3: Lock-Free Double Check]                                   │
+        │  Query local DB catalog one more time                     │
+        │                                                           │
+        ├───► (Stampede Mitigated: HIT) ----------------------------┤
+        │                                                           │
+        └───► (True Miss: Hit Network)                              │
+              ▼                                                     │
+        [AniList GraphQL API]                                       │
+              │  Outbound query dispatch                            │
+              ▼                                                     │
+        [Cache Populate Layer]                                      │
+              │  Insert fresh metadata and episodic seasonal depths │
+              ▼                                                     │
+ [Update Progress State Engine] ------------------------------------┴─► [Anime Watch Progress Ledger]
 ```
 
 ## 📊 Joint-Viewing Intelligence & Recommendation Pipeline
@@ -98,16 +98,20 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 
 ## Core Philosophy & Constraints
 1. **Zero External Runtime Dependencies:** Built strictly using the Go standard library (`net/http`, `slog`, `regexp`, `database/sql`, `sync/atomic`) to minimize container footprint and maximize execution velocity.
-2. **Implicit Engagement Tracking:** Eliminates explicit user rating matrices. Taste anchors and enjoyment metrics are calculated programmatically through completion depth **Engagement Score $\ge$ 80%**.
+2. **Implicit Engagement Tracking:** Eliminates explicit user rating matrices. Taste anchors and enjoyment metrics are calculated programmatically through completion depth (**Engagement Score** $\ge$ 80%).
 3. **Decoupled Data Infrastructure:** Configuration parameters point to a central, un-tracked SQLite file using Write-Ahead Logging (`WAL` mode) to allow multi-process concurrency across the suite.
 4. **Structured DevOps Telemetry:** Built with consistent, scannable log tokens (`[INIT]`, `[SECURE]`, `[IDLE]`, `[REALTIME]`, `[SERVER]`, `[OK]`, `[ERROR]`, `[SHUTDOWN]`) for clean, production-grade terminal visibility.
 5. **Graceful Pipeline Teardown:** Listens explicitly for OS lifecycle interrupts (`SIGINT`, `SIGTERM`). On capture, the API gateway locks down instantly, tickers drop safely, and SQLite connection pools execute a full final checkpoint—collapsing active `-wal` and `-shm` disk fragments back down into a single consolidated database file.
 
+---
+
 ## 🛠️ Tech Stack & Runtime
-- **Language Runtime:** Go 1.24+ (Native structured logging, atomic concurrency primitives, and enhanced HTTP routing)
-- **Database Engine:** SQLite 3 via `github.com/mattn/go-sqlite3`
-- **Metadata Authority:** AniList GraphQL API (Enforced via a thread-safe 700ms token ticker coordinating cooperative worker pacing below 90 reqs/min)
-- **Deployment Target:** Docker Multi-stage scratch container
+* **Language Runtime:** Go 1.24+ (Native structured logging, atomic concurrency primitives, and enhanced HTTP routing)
+* **Database Engine:** SQLite 3 via `github.com/mattn/go-sqlite3`
+* **Metadata Authority:** AniList GraphQL API (Enforced via a thread-safe 700ms token ticker coordinating cooperative worker pacing below 90 reqs/min)
+* **Deployment Target:** Docker Multi-stage scratch container
+
+---
 
 ## 🗺️ Project Roadmap
 ### Phase 1: Core Scaffolding & Parsing (Completed)
@@ -135,3 +139,7 @@ This repository serves as the foundational blueprint for **The Sentinel Suite**�
 - [x] Code the taste profile engine and calculate completion metrics based on the 80% engagement rule.
 - [x] Expose an analytical intelligence endpoint (`GET /api/v1/analytics/taste`) to resolve user preference anchors.
 - [x] Implement Joint-Viewing Delta calculation endpoints (`GET /api/v1/analytics/shared`) to cross-reference profiles, compute mutual affinity, and fetch curated external recommendations.
+
+### Phase 5: Containerization & Code Standardization (In Progress)
+- [x] Refactor legacy files to conform to the standardized repository code guide and clean visual anchors.
+- [ ] Author a multi-stage, scratch-based `Dockerfile` optimized for local home lab deployment.

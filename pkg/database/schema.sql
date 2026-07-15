@@ -1,9 +1,10 @@
 -- ====================================================================
--- THE SENTINEL SUITE: UNIFIED CORE SCHEMA (V2 - CRUNCHY-STANDARDIZED)
+-- THE SENTINEL SUITE: UNIFIED ANIME EXTENSION SCHEMA (V2 - STANDARDIZED)
 -- ====================================================================
 
 -- --------------------------------------------------------------------
--- 1. Local User Identities
+--          -- LOCAL USER IDENTITIES (SHARED SUITE ANCHOR) --
+-- Included here via IF NOT EXISTS to guarantee cross-repo consistency.
 -- Stores system account profiles responsible for active media tracking.
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
@@ -13,16 +14,16 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- --------------------------------------------------------------------
--- 2. Normalized Media Catalog (Autonomous Cache Layer)
--- Acts as a read-through localized lookup layer to shield upstream API resources.
--- Utilizes strict structural checks to enforce reliable serialization formats.
+--       -- NORMALIZED ANIME CATALOG (AUTONOMOUS CACHE LAYER) --
+-- Acts as a read-through localized lookup layer to shield AniList API quotas.
+-- Flexible string definitions accommodate crowdsourced upstream metadata variations.
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS media_catalog (
+CREATE TABLE IF NOT EXISTS anime_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    cache_key TEXT UNIQUE,
-    title_romaji TEXT NOT NULL,
-    title_english TEXT,
+    external_id TEXT NOT NULL UNIQUE,        -- AniList serial string identifier
+    cache_key TEXT NOT NULL UNIQUE,          -- Normalized lower-case base search key
+    title_romaji TEXT NOT NULL,              -- Official romaji presentation title
+    title_english TEXT,                      -- Official english presentation title
     format TEXT CHECK(format IN ('TV', 'MOVIE', 'OVA', 'SPECIAL', 'ONA', 'TV_SHORT')),
     status TEXT CHECK(status IN ('FINISHED', 'RELEASING', 'NOT_YET_RELEASED')),
     total_episodes_count INTEGER DEFAULT 1,
@@ -30,40 +31,40 @@ CREATE TABLE IF NOT EXISTS media_catalog (
 );
 
 -- --------------------------------------------------------------------
--- 3. Catalog Metadata Weights for Automated Taste Profiles
--- Maps relational category classifiers to physical catalog items.
+--    -- CATALOG METADATA WEIGHTS FOR AUTOMATED TASTE PROFILES --
+-- Maps relational category classifiers to physical anime catalog items.
 -- Cascade deletions ensure that orphaned tags drop cleanly if a title is removed.
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS catalog_tags (
+CREATE TABLE IF NOT EXISTS anime_catalog_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    media_id INTEGER NOT NULL,
+    anime_id INTEGER NOT NULL,
     type TEXT CHECK(type IN ('GENRE', 'TAG')),
     name TEXT NOT NULL,
-    FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
+    FOREIGN KEY(anime_id) REFERENCES anime_catalog(id) ON DELETE CASCADE
 );
 
 -- --------------------------------------------------------------------
--- 4. Isolated User Progress Ledgers
+--              -- ISOLATED ANIME PROGRESS LEDGERS --
 -- Evaluates real-time milestone checkboxes, tracking absolute episode progress decimal scales
 -- and current affinity sentiment values bound to individual unique user profiles.
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS watch_progress (
+CREATE TABLE IF NOT EXISTS anime_watch_progress (
     user_id INTEGER,
-    media_id INTEGER,
+    anime_id INTEGER,
     current_episode_progress REAL DEFAULT 0.0,
     sentiment INTEGER NOT NULL CHECK(sentiment IN (-1, 0, 1)) DEFAULT 0,
     last_watched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, media_id),
-    FOREIGN KEY(user_id) REFERENCES users(id),
-    FOREIGN KEY(media_id) REFERENCES media_catalog(id) ON DELETE CASCADE
+    PRIMARY KEY (user_id, anime_id),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(anime_id) REFERENCES anime_catalog(id) ON DELETE CASCADE
 );
 
 -- --------------------------------------------------------------------
--- 5. High-Volume Ingestion Staging Table
--- Provides an isolated raw buffer sink layer for high-throughput stream ingestion.
--- Relaxes upstream relational constraints to allow non-blocking initial insertions.
+--    -- HIGH-VOLUME INGESTION STAGING TABLE (ISOLATED ANIME SINK) --
+-- Provides a dedicated staging sandbox to prevent cross-service lock contention.
+-- Relaxes upstream relational constraints to maximize non-blocking input rates.
 -- --------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS ingest_staging_history (
+CREATE TABLE IF NOT EXISTS anime_ingest_staging_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
     series_id TEXT NOT NULL,
@@ -80,10 +81,10 @@ CREATE TABLE IF NOT EXISTS ingest_staging_history (
 );
 
 -- --------------------------------------------------------------------
--- 6. High-Performance Query Optimizations
+--              -- HIGH-PERFORMANCE QUERY OPTIMIZATIONS --
 -- Explicitly constructed indexes to accelerate fast key scans, user profile updates,
 -- and background processing engine task queries.
 -- --------------------------------------------------------------------
-CREATE INDEX IF NOT EXISTS idx_catalog_lookup ON media_catalog(external_id);
-CREATE INDEX IF NOT EXISTS idx_progress_user ON watch_progress(user_id);
-CREATE INDEX IF NOT EXISTS idx_ingest_status ON ingest_staging_history(processed_status);
+CREATE INDEX IF NOT EXISTS idx_anime_catalog_lookup ON anime_catalog(cache_key);
+CREATE INDEX IF NOT EXISTS idx_anime_progress_user ON anime_watch_progress(user_id);
+CREATE INDEX IF NOT EXISTS idx_anime_ingest_status ON anime_ingest_staging_history(processed_status);

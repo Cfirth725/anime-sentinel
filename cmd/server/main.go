@@ -20,6 +20,10 @@ import (
 )
 
 func main() {
+	// ====================================================================
+	//         -- SERVICE INITIALIZATION & CONFIGURATION BOOTSTRAP --
+	// ====================================================================
+
 	// Initialize structured logging. Using slog key-value pairs ensures
 	// the application telemetry is machine-readable and ready for log aggregators.
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -63,6 +67,10 @@ func main() {
 	// isolate taste profiles, and cross-reference shared user viewing habits.
 	intelEngine := intelligence.NewIntelligenceEngine(db, alClient)
 
+	// ====================================================================
+	//                -- HTTP ROUTING & PIPELINE MULTIPLEXER --
+	// ====================================================================
+
 	// Register API routing patterns directly to Go's native HTTP multiplexer.
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/ingest", engine.HandleIngest)
@@ -74,6 +82,10 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "💚 Anime Sentinel System Health: OPERATIONAL")
 	})
+
+	// ====================================================================
+	//                -- RUNTIME SERVER CORE & OS SIGNAL LISTENERS --
+	// ====================================================================
 
 	// Configure the underlying HTTP Server wrapper to support controlled lifecycle shutdowns.
 	server := &http.Server{
@@ -97,6 +109,10 @@ func main() {
 	// Execution pauses here, unblocking only when an active OS signal drops into the channel.
 	sig := <-shutdownSignal
 	slog.Warn("[SHUTDOWN] Shutdown signal received! Initiating graceful pipeline teardown...", "signal", sig.String())
+
+	// ====================================================================
+	//               -- GRACEFUL PIPELINE TEARDOWN SEQUENCE --
+	// ====================================================================
 
 	// Execute the lifecycle teardown sequence in strict reverse order of instantiation.
 	// 1. Force the gateway to stop accepting new connection threads and drain active requests.

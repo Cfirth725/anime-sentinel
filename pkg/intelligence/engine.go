@@ -12,6 +12,10 @@ import (
 	"github.com/Cfirth725/anime-sentinel/pkg/models"
 )
 
+// ====================================================================
+//             -- CORE ANALYTICAL INTELLIGENCE SERVICE --
+// ====================================================================
+
 // IntelligenceEngine orchestrates taste profiling metrics and engagement analytics.
 type IntelligenceEngine struct {
 	db       *sql.DB
@@ -49,6 +53,10 @@ func (ie *IntelligenceEngine) ExtractTasteAnchors(userID int64) ([]models.UserEn
 	return anchors, nil
 }
 
+// ====================================================================
+//             -- COOPERATIVE JOINT-VIEWING COMPILER --
+// ====================================================================
+
 // CalculateSharedRecommendations analyzes the historical overlap between two profiles,
 // computes a mutual affinity rating, pulls external suggestions from AniList, and filters out already-seen content.
 func (ie *IntelligenceEngine) CalculateSharedRecommendations(userAID, userBID int64) (float64, []models.RecommendationNode, error) {
@@ -65,9 +73,10 @@ func (ie *IntelligenceEngine) CalculateSharedRecommendations(userAID, userBID in
 	anchorsA := make(map[int64]bool)
 
 	for _, p := range profilesA {
-		seenOrTracked[p.MediaID] = true
+		// CHANGED: p.MediaID ➔ p.AnimeID
+		seenOrTracked[p.AnimeID] = true
 		if p.IsTasteAnchor {
-			anchorsA[p.MediaID] = true
+			anchorsA[p.AnimeID] = true
 		}
 	}
 
@@ -75,9 +84,10 @@ func (ie *IntelligenceEngine) CalculateSharedRecommendations(userAID, userBID in
 	var sharedSeeds []models.UserEngagement
 
 	for _, p := range profilesB {
-		seenOrTracked[p.MediaID] = true
+		// CHANGED: p.MediaID ➔ p.AnimeID
+		seenOrTracked[p.AnimeID] = true
 		if p.IsTasteAnchor {
-			if anchorsA[p.MediaID] {
+			if anchorsA[p.AnimeID] {
 				mutualAnchorCount++
 				sharedSeeds = append(sharedSeeds, p)
 			}
